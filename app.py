@@ -354,7 +354,7 @@ def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15, radius_km=5):
         folium.Marker(
             location=center_loc,
             icon=folium.DivIcon(
-                html='<div style="background-color: white; padding: 10px; border: 3px solid #007cba; border-radius: 8px; font-size: 14px; font-weight: bold; color: #007cba;">📍 </div>'
+                html='<div style="background-color: white; padding: 10px; border: 3px solid #007cba; border-radius: 8px; font-size: 14px; font-weight: bold; color: #007cba;">📍 KLIK DI PETA UNTUK PILIH LOKASI GANGGUAN</div>'
             )
         ).add_to(m)
         
@@ -368,7 +368,7 @@ def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15, radius_km=5):
             
             folium.Circle(
                 location=gangguan_coords,
-                radius=radius_km * 100,
+                radius=radius_km * 1000,
                 color='red',
                 fill=True,
                 fillColor='red',
@@ -474,6 +474,28 @@ with st.sidebar:
     
     st.markdown("---")
     zoom_level = st.slider("Zoom Level Peta", 10, 18, 15, key="zoom_input")
+
+    # Filters: name contains and source layer
+    name_filter = st.text_input("Filter by name (contains)", value="", key="name_filter")
+
+    # detect possible source column values (only if master loaded)
+    source_col = None
+    source_values = []
+    if st.session_state.get('gdf_master') is not None:
+        candidates = ['source_layer', 'source', 'layer', 'folder', 'layer_name']
+        for c in candidates:
+            if c in st.session_state.gdf_master.columns:
+                source_col = c
+                try:
+                    source_values = sorted([str(x) for x in st.session_state.gdf_master[c].dropna().unique()])
+                except Exception:
+                    source_values = []
+                break
+
+    if source_col and source_values:
+        source_filter = st.selectbox("Filter by source layer", ["(any)"] + source_values, index=0, key="source_filter")
+    else:
+        source_filter = "(any)"
 
 # Load master KML
 if st.session_state.gdf_master is None:
