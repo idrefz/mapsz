@@ -19,6 +19,16 @@ st.set_page_config(
 # Konfigurasi path KML master
 KML_MASTER_PATH = "zxcmcnc.kml"  # Ganti dengan path file master Anda
 
+# Initialize session state
+if 'gdf_master' not in st.session_state:
+    st.session_state.gdf_master = None
+if 'analysis_done' not in st.session_state:
+    st.session_state.analysis_done = False
+if 'gdf_nearby' not in st.session_state:
+    st.session_state.gdf_nearby = None
+if 'gangguan_coords' not in st.session_state:
+    st.session_state.gangguan_coords = None
+
 # Fungsi untuk memuat KML master dengan caching
 @st.cache_data(ttl=3600)  # Cache 1 jam
 def load_master_kml():
@@ -26,7 +36,6 @@ def load_master_kml():
     try:
         if os.path.exists(KML_MASTER_PATH):
             gdf = gpd.read_file(KML_MASTER_PATH, driver='KML')
-            st.success(f"✅ Master KML loaded: {len(gdf)} features")
             return gdf
         else:
             st.error(f"❌ File master KML tidak ditemukan: {KML_MASTER_PATH}")
@@ -40,9 +49,7 @@ def filter_features_nearby(gdf, center_point, radius_km=5):
     """Filter features dalam radius tertentu dari titik gangguan"""
     try:
         # Buat buffer sekitar titik gangguan (dalam derajat)
-        # 1 derajat ≈ 111 km, jadi radius_km/111
         buffer_degrees = radius_km / 111
-        
         buffer_zone = center_point.buffer(buffer_degrees)
         
         # Filter features yang berinterseksi dengan buffer
@@ -51,14 +58,7 @@ def filter_features_nearby(gdf, center_point, radius_km=5):
         # Hitung jarak untuk setiap feature
         def calculate_distance(geometry):
             try:
-                if geometry.geom_type == 'Point':
-                    return center_point.distance(geometry) * 111000  # meter
-                elif geometry.geom_type in ['LineString', 'MultiLineString']:
-                    return center_point.distance(geometry) * 111000  # meter
-                elif geometry.geom_type in ['Polygon', 'MultiPolygon']:
-                    return center_point.distance(geometry) * 111000  # meter
-                else:
-                    return center_point.distance(geometry) * 111000  # meter
+                return center_point.distance(geometry) * 111000  # meter
             except:
                 return float('inf')
         
@@ -101,10 +101,10 @@ def create_detailed_popup(row):
     return popup_html
 
 # Fungsi untuk membuat peta
-def create_map(gdf_nearby, center_point, gangguan_coords, zoom=15):
+def create_map(gdf_nearby, gangguan_coords, zoom=15):
     """Membuat peta Folium dengan features terdekat"""
     m = folium.Map(
-        location=[gangguan_coords[0], gangguan_coords[1]], 
+        location=gangguan_coords, 
         zoom_start=zoom, 
         control_scale=True
     )
@@ -175,21 +175,29 @@ with st.sidebar:
     # Input koordinat
     col1, col2 = st.columns(2)
     with col1:
-        lat = st.number_input("Latitude", value=-6.200000, format="%.6f", step=0.000001)
+        lat = st.number_input("Latitude", value=-6.200000, format="%.6f", step=0.000001, key="lat_input")
     with col2:
-        lon = st.number_input("Longitude", value=106.816666, format="%.6f", step=0.000001)
+        lon = st.number_input("Longitude", value=106.816666, format="%.6f", step=0.000001, key="lon_input")
     
     # Radius pencarian
-    radius_km = st.slider("Radius Pencarian (km)", 1, 20, 5)
+    radius_km = st.slider("Radius Pencarian (km)", 1, 20, 5, key="radius_input")
     
     # Tombol analisis
-    analyze_btn = st.button("🚀 Analisis Gangguan", type="primary", use_container_width=True)
+    col1, col2 = st.columns(2)
+    with col1:
+        analyze_btn = st.button("🚀 Analisis Gangguan", type="primary", use_container_width=True)
+    with col2:
+        if st.button("🔄 Reset", use_container_width=True):
+            st.session_state.analysis_done = False
+            st.session_state.gdf_nearby = None
+            st.session_state.gangguan_coords = None
+            st.rerun()
     
     st.markdown("---")
     st.header("⚙️ Settings")
     
     # Auto-zoom level
-    zoom_level = st.slider("Zoom Level Peta", 10, 18, 15)
+    zoom_level = st.slider("Zoom Level Peta", 10, 18, 15, key="zoom_input")
     
     st.markdown("---")
     st.info("""
@@ -200,47 +208,54 @@ with st.sidebar:
     4. Lihat hasil di peta & tabel
     """)
 
-# Main content
-# Load master KML sekali saat startup
-if 'gdf_master' not in st.session_state:
-    with st.spinner("Memuat data master KML..."):
+# Load master KML
+if st.session_state.gdf_master is None:
+    with st.spinner("Memuat data master KML... Mohon tunggu..."):
         st.session_state.gdf_master = load_master_kml()
+        if st.session_state.gdf_master is not None:
+            st.success(f"✅ Master KML loaded: {len(st.session_state.gdf_master)} features")
 
+# Main content
 if st.session_state.gdf_master is not None:
     # Jika tombol analisis ditekan
     if analyze_btn:
-        st.header(f"📊 Hasil Analisis Gangguan")
-        st.write(f"**Lokasi:** {lat:.6f}, {lon:.6f}")
-        st.write(f"**Radius:** {radius_km} km")
+        st.session_state.analysis_done = True
+        st.session_state.gangguan_coords = [lat, lon]
         
         # Buat titik gangguan
         gangguan_point = Point(lon, lat)
-        gangguan_coords = [lat, lon]
         
         # Filter features terdekat
         with st.spinner(f"Mencari features dalam radius {radius_km} km..."):
-            gdf_nearby = filter_features_nearby(
+            st.session_state.gdf_nearby = filter_features_nearby(
                 st.session_state.gdf_master, 
                 gangguan_point, 
                 radius_km
             )
+    
+    # Tampilkan hasil analisis jika sudah dilakukan
+    if st.session_state.analysis_done and st.session_state.gangguan_coords:
+        st.header(f"📊 Hasil Analisis Gangguan")
+        st.write(f"**Lokasi:** {st.session_state.gangguan_coords[0]:.6f}, {st.session_state.gangguan_coords[1]:.6f}")
+        st.write(f"**Radius:** {radius_km} km")
         
         # Tampilkan statistik
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            st.metric("Total Features Ditemukan", len(gdf_nearby))
+            st.metric("Total Features Ditemukan", 
+                     len(st.session_state.gdf_nearby) if st.session_state.gdf_nearby is not None else 0)
         
         with col2:
-            if not gdf_nearby.empty:
-                closest_dist = gdf_nearby['jarak_meter'].iloc[0]
+            if st.session_state.gdf_nearby is not None and not st.session_state.gdf_nearby.empty:
+                closest_dist = st.session_state.gdf_nearby['jarak_meter'].iloc[0]
                 st.metric("Jarak Terdekat", f"{closest_dist:.0f} m")
             else:
                 st.metric("Jarak Terdekat", "Tidak ada")
         
         with col3:
-            if not gdf_nearby.empty:
-                types = gdf_nearby.geometry.type.unique()
+            if st.session_state.gdf_nearby is not None and not st.session_state.gdf_nearby.empty:
+                types = st.session_state.gdf_nearby.geometry.type.unique()
                 st.metric("Tipe Geometri", len(types))
             else:
                 st.metric("Tipe Geometri", "0")
@@ -251,15 +266,26 @@ if st.session_state.gdf_master is not None:
         # Buat dan tampilkan peta
         st.header("🗺️ Peta Lokasi Gangguan & Jaringan Terdekat")
         
-        m = create_map(gdf_nearby, gangguan_point, gangguan_coords, zoom_level)
-        st_folium(m, width=1200, height=600)
+        if st.session_state.gdf_nearby is not None:
+            m = create_map(st.session_state.gdf_nearby, st.session_state.gangguan_coords, zoom_level)
+            
+            # Gunakan st_folium dengan key yang unique untuk menjaga state peta
+            map_data = st_folium(
+                m, 
+                width=1200, 
+                height=600,
+                key=f"map_{lat}_{lon}"  # Key unique berdasarkan koordinat
+            )
+            
+            # Debug info untuk memastikan peta tetap di lokasi yang benar
+            st.caption(f"Peta terpusat di: {st.session_state.gangguan_coords}")
         
         # Tampilkan tabel hasil
-        if not gdf_nearby.empty:
+        if st.session_state.gdf_nearby is not None and not st.session_state.gdf_nearby.empty:
             st.header("📋 Detail Features Terdekat")
             
             # Siapkan data untuk tabel
-            display_df = gdf_nearby.copy()
+            display_df = st.session_state.gdf_nearby.copy()
             
             # Pilih kolom yang ingin ditampilkan (exclude geometry)
             cols_to_display = [col for col in display_df.columns if col != 'geometry']
@@ -289,13 +315,14 @@ if st.session_state.gdf_master is not None:
                 label="📥 Download Hasil Analisis (CSV)",
                 data=csv_data,
                 file_name=f"gangguan_{lat:.6f}_{lon:.6f}_{datetime.now().strftime('%H%M')}.csv",
-                mime="text/csv"
+                mime="text/csv",
+                key="download_btn"
             )
         else:
             st.warning("⚠️ Tidak ada features ditemukan dalam radius yang ditentukan. Coba perbesar radius pencarian.")
     
     else:
-        # Tampilan awal
+        # Tampilan awal sebelum analisis
         st.markdown("""
         ## 🚀 Sistem Quick Response Gangguan
         
@@ -326,10 +353,10 @@ if st.session_state.gdf_master is not None:
             else:
                 st.metric("Kolom Tersedia", len(st.session_state.gdf_master.columns))
         
-        # Peta overview
+        # Peta overview default
         st.header("🗺️ Overview Jaringan")
         overview_map = folium.Map(location=[-6.2, 106.8], zoom_start=10)
-        st_folium(overview_map, width=1200, height=400)
+        st_folium(overview_map, width=1200, height=400, key="overview_map")
 
 else:
     st.error("""
