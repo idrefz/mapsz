@@ -339,7 +339,7 @@ def create_detailed_popup(row):
     except Exception as e:
         return f"<div>Popup error: {str(e)}</div>"
 
-def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15, radius_km=5):
+def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15, radius_km=5, tiles=None):
     """Membuat peta interaktif"""
     try:
         if gangguan_coords:
@@ -347,7 +347,11 @@ def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15, radius_km=5):
         else:
             center_loc = [-6.2, 106.8]
         
-        m = folium.Map(location=center_loc, zoom_start=zoom, control_scale=True)
+        if tiles and tiles.startswith('http'):
+            m = folium.Map(location=center_loc, zoom_start=zoom, control_scale=True, tiles=None)
+            folium.TileLayer(tiles=tiles, attr='Esri', name='Satellite', overlay=False, control=True).add_to(m)
+        else:
+            m = folium.Map(location=center_loc, zoom_start=zoom, control_scale=True, tiles=tiles)
         m.add_child(folium.LatLngPopup())
         
         # Instruksi klik
@@ -434,7 +438,9 @@ def analyze_from_map_click(click_data, radius_km):
                     st.session_state.get('name_filter', ''),
                     st.session_state.get('name_list', []),
                     locals().get('source_col', None),
-                    st.session_state.get('source_filter', [])
+                    st.session_state.get('source_filter', []),
+                    folder_col_name=locals().get('folder_col', None),
+                    folder_filter_vals=st.session_state.get('folder_filter', [])
                 )
             except Exception:
                 pass
@@ -446,7 +452,7 @@ def analyze_from_map_click(click_data, radius_km):
         return False
 
 
-def apply_filters(gdf, name_filter_text, name_exact_list, source_col_name, source_filter_list):
+def apply_filters(gdf, name_filter_text, name_exact_list, source_col_name, source_filter_list, folder_col_name=None, folder_filter_vals=None):
     """Apply name substring, exact name list and source layer filters to a GeoDataFrame."""
     if gdf is None or gdf.empty:
         return gdf
@@ -477,6 +483,21 @@ def apply_filters(gdf, name_filter_text, name_exact_list, source_col_name, sourc
             out = out[out[source_col_name].astype(str).isin(source_filter_list)]
         except Exception:
             pass
+
+    # folder filter (multi-select), support if folder column exists
+    if not folder_col_name:
+        folder_col_candidates = [c for c in out.columns if c.lower() in ['folder', 'dir', 'layer_folder', 'group']]
+        if folder_col_candidates:
+            folder_col_name = folder_col_candidates[0]
+
+    if folder_col_name:
+        if folder_filter_vals is None:
+            folder_filter_vals = st.session_state.get('folder_filter', [])
+        if folder_filter_vals:
+            try:
+                out = out[out[folder_col_name].astype(str).isin(folder_filter_vals)]
+            except Exception:
+                pass
 
     return out
 
@@ -519,6 +540,27 @@ with st.sidebar:
     
     st.markdown("---")
     zoom_level = st.slider("Zoom Level Peta", 10, 18, 15, key="zoom_input")
+
+    # Folder selection (if available)
+    folder_col = None
+    folder_values = []
+    if st.session_state.get('gdf_master') is not None:
+        for c in ['folder', 'dir', 'layer_folder', 'group']:
+            if c in st.session_state.gdf_master.columns:
+                folder_col = c
+                try:
+                    folder_values = sorted([str(x) for x in st.session_state.gdf_master[c].dropna().unique()])
+                except Exception:
+                    folder_values = []
+                break
+
+    if folder_col and folder_values:
+        folder_filter = st.multiselect("Filter by folder", options=folder_values, default=[], key="folder_filter")
+    else:
+        folder_filter = []
+
+    # Basemap selection
+    basemap = st.selectbox("Pilih Basemap", options=["OpenStreetMap", "Stamen Terrain", "Stamen Toner", "Satellite (Esri)"] , index=0, key="basemap_choice")
 
     # Filters: name contains and source layer
     name_filter = st.text_input("Filter by name (contains)", value="", key="name_filter")
@@ -569,10 +611,23 @@ if st.session_state.gdf_master is not None and not st.session_state.gdf_master.e
     # Peta interaktif
     st.header("🗺️ Peta Interaktif - Klik untuk Pilih Lokasi Gangguan")
     
+    # map tiles mapping
+    tiles = None
+    if basemap == 'OpenStreetMap':
+        tiles = 'OpenStreetMap'
+    elif basemap == 'Stamen Terrain':
+        tiles = 'Stamen Terrain'
+    elif basemap == 'Stamen Toner':
+        tiles = 'Stamen Toner'
+    elif basemap == 'Satellite (Esri)':
+        tiles = 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}'
+
     interactive_map = create_interactive_map(
         st.session_state.gdf_nearby, 
         st.session_state.gangguan_coords, 
-        zoom_level
+        zoom_level,
+        radius_km=radius_km,
+        tiles=tiles
     )
     
     map_data = st_folium(interactive_map, width=1200, height=500, key="interactive_map")
@@ -613,7 +668,9 @@ if st.session_state.gdf_master is not None and not st.session_state.gdf_master.e
                 st.session_state.get('name_filter', ''),
                 st.session_state.get('name_list', []),
                 source_col,
-                st.session_state.get('source_filter', [])
+                st.session_state.get('source_filter', []),
+                folder_col_name=folder_col,
+                folder_filter_vals=st.session_state.get('folder_filter', [])
             )
         except Exception:
             pass
