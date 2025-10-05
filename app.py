@@ -368,7 +368,7 @@ def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15, radius_km=5):
             
             folium.Circle(
                 location=gangguan_coords,
-                radius=radius_km * 1000,
+                radius=radius_km * 100,
                 color='red',
                 fill=True,
                 fillColor='red',
