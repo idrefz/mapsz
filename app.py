@@ -4,6 +4,8 @@ from streamlit_folium import st_folium
 import geopandas as gpd
 import pandas as pd
 from shapely.geometry import Point, LineString, Polygon, MultiLineString, MultiPolygon
+from folium.plugins import MarkerCluster
+import branca
 import tempfile
 import os
 from datetime import datetime
@@ -315,13 +317,13 @@ def create_detailed_popup(row):
         for col in row.index:
             if col != 'geometry' and pd.notna(row[col]) and row[col] not in ['', None]:
                 value = str(row[col])
-                if len(value) > 150:
-                    value = value[:150] + "..."
-                
+                # Keep popup concise
+                if len(value) > 120:
+                    value = value[:120] + "..."
                 popup_html += f"""
-                <div style='margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 5px;'>
-                    <strong style='color: #333;'>{col}:</strong><br>
-                    <span style='color: #666; word-wrap: break-word;'>{value}</span>
+                <div style='margin-bottom:6px;'>
+                  <strong style='color:#333'>{col}:</strong>
+                  <div style='color:#444; word-wrap:break-word'>{value}</div>
                 </div>
                 """
         
@@ -348,61 +350,76 @@ def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15, radius_km=5):
             center_loc = [-6.2, 106.8]
         
         m = folium.Map(location=center_loc, zoom_start=zoom, control_scale=True)
+        # allow user to click to get lat/lng in browser dev, keep as optional helper
         m.add_child(folium.LatLngPopup())
         
-        # Instruksi klik
-        folium.Marker(
-            location=center_loc,
-            icon=folium.DivIcon(
-                html='<div style="background-color: white; padding: 10px; border: 3px solid #007cba; border-radius: 8px; font-size: 14px; font-weight: bold; color: #007cba;">📍 KLIK DI PETA UNTUK PILIH LOKASI GANGGUAN</div>'
-            )
-        ).add_to(m)
-        
-        # Marker gangguan
+        # Marker gangguan (draw circle first so markers appear on top)
         if gangguan_coords:
+            folium.Circle(
+                location=gangguan_coords,
+                radius=radius_km * 1000,
+                color='#d43f3a',
+                weight=2,
+                fill=True,
+                fillColor='#f4c6c5',
+                fillOpacity=0.06,
+                popup=f"Area Pencarian ({radius_km} km)"
+            ).add_to(m)
             folium.Marker(
                 location=gangguan_coords,
                 popup=f"<b>🚨 TITIK GANGGUAN</b><br>Lat: {gangguan_coords[0]:.6f}<br>Lon: {gangguan_coords[1]:.6f}",
                 icon=folium.Icon(color='red', icon='exclamation-triangle', prefix='fa')
             ).add_to(m)
-            
-            folium.Circle(
-                location=gangguan_coords,
-                radius=radius_km * 100,
-                color='red',
-                fill=True,
-                fillColor='red',
-                fillOpacity=0.1,
-                popup=f"Area Pencarian ({radius_km} km)"
-            ).add_to(m)
         
-        # Tambahkan features
+        # Tambahkan features: cluster point markers for readability
         if gdf_nearby is not None and not gdf_nearby.empty:
+            marker_cluster = MarkerCluster(name='Features').add_to(m)
+            # detect a name column for tooltip
+            name_cols = [c for c in gdf_nearby.columns if 'name' in c.lower()]
+            name_col = name_cols[0] if name_cols else None
+
             for idx, row in gdf_nearby.iterrows():
                 try:
                     if row.geometry.geom_type == 'Point':
+                        tooltip = None
+                        if name_col and pd.notna(row.get(name_col)):
+                            tooltip = str(row.get(name_col))
+
                         folium.Marker(
                             location=[row.geometry.y, row.geometry.x],
-                            popup=folium.Popup(create_detailed_popup(row), max_width=400),
+                            popup=folium.Popup(create_detailed_popup(row), max_width=350),
+                            tooltip=tooltip,
                             icon=folium.Icon(color='blue', icon='info-sign')
-                        ).add_to(m)
-                    
+                        ).add_to(marker_cluster)
+
                     elif row.geometry.geom_type in ['LineString', 'MultiLineString']:
                         folium.GeoJson(
                             row.geometry.__geo_interface__,
                             style_function=lambda x: {'color': 'green', 'weight': 4, 'opacity': 0.8},
-                            popup=folium.Popup(create_detailed_popup(row), max_width=400)
+                            popup=folium.Popup(create_detailed_popup(row), max_width=350)
                         ).add_to(m)
-                    
+
                     elif row.geometry.geom_type in ['Polygon', 'MultiPolygon']:
                         folium.GeoJson(
                             row.geometry.__geo_interface__,
-                            style_function=lambda x: {'fillColor': 'orange', 'color': 'orange', 'weight': 2, 'fillOpacity': 0.3},
-                            popup=folium.Popup(create_detailed_popup(row), max_width=400)
+                            style_function=lambda x: {'fillColor': 'orange', 'color': 'orange', 'weight': 2, 'fillOpacity': 0.25},
+                            popup=folium.Popup(create_detailed_popup(row), max_width=350)
                         ).add_to(m)
-                        
-                except Exception as e:
+                except Exception:
                     continue
+
+        # small legend
+        try:
+            legend_html = '''
+            <div style="position: fixed; bottom: 50px; left: 10px; width:160px; z-index:9999; background:white; border:1px solid #ccc; padding:8px; font-size:12px;">
+                <b>Legend</b><br>
+                <i style="background:#d43f3a;width:10px;height:10px;display:inline-block;margin-right:6px;"></i> Gangguan (center)<br>
+                <i style="background:blue;width:10px;height:10px;display:inline-block;margin-right:6px;"></i> Feature
+            </div>
+            '''
+            m.get_root().html.add_child(branca.element.Element(legend_html))
+        except Exception:
+            pass
         
         return m
         
