@@ -368,7 +368,7 @@ def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15, radius_km=5):
             
             folium.Circle(
                 location=gangguan_coords,
-                radius=radius_km * 1000,
+                radius=radius_km * 100,
                 color='red',
                 fill=True,
                 fillColor='red',
@@ -478,6 +478,23 @@ with st.sidebar:
     # Filters: name contains and source layer
     name_filter = st.text_input("Filter by name (contains)", value="", key="name_filter")
 
+    # provide multiselect of exact names if available
+    name_values = []
+    if st.session_state.get('gdf_master') is not None:
+        # detect name-like columns
+        name_cols_cand = [c for c in st.session_state.gdf_master.columns if 'name' in c.lower()]
+        if name_cols_cand:
+            try:
+                name_col_for_list = name_cols_cand[0]
+                name_values = sorted([str(x) for x in st.session_state.gdf_master[name_col_for_list].dropna().unique()])
+            except Exception:
+                name_values = []
+
+    if name_values:
+        name_list = st.multiselect("Filter by exact name (multi)", options=name_values, default=[], key="name_list")
+    else:
+        name_list = []
+
     # detect possible source column values (only if master loaded)
     source_col = None
     source_values = []
@@ -493,9 +510,9 @@ with st.sidebar:
                 break
 
     if source_col and source_values:
-        source_filter = st.selectbox("Filter by source layer", ["(any)"] + source_values, index=0, key="source_filter")
+        source_filter = st.multiselect("Filter by source layer (multi)", options=source_values, default=[], key="source_filter")
     else:
-        source_filter = "(any)"
+        source_filter = []
 
 # Load master KML
 if st.session_state.gdf_master is None:
