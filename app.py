@@ -7,10 +7,11 @@ import xml.etree.ElementTree as ET
 from io import StringIO
 import tempfile
 import os
+import re
 
 # Konfigurasi halaman
 st.set_page_config(
-    page_title="Web GIS dengan KML",
+    page_title="Web GIS SERANG Deployment",
     page_icon="🌍",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -50,11 +51,25 @@ st.markdown("""
         border-left: 4px solid #2196f3;
         margin: 0.5rem 0;
     }
+    .folder-structure {
+        background-color: #fff3cd;
+        padding: 1rem;
+        border-radius: 8px;
+        border-left: 4px solid #ffc107;
+        margin: 0.5rem 0;
+    }
+    .deployment-item {
+        background-color: #d1ecf1;
+        padding: 0.5rem;
+        margin: 0.2rem 0;
+        border-radius: 5px;
+        border-left: 3px solid #17a2b8;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-def parse_kml_with_folders(kml_content):
-    """Parse KML dengan struktur folder dan semua tipe geometri"""
+def parse_kml_with_serang_structure(kml_content):
+    """Parse KML dengan struktur folder SERANG Deployment"""
     try:
         features = []
         
@@ -116,38 +131,28 @@ def parse_kml_with_folders(kml_content):
                             if len(parts) >= 2:
                                 coordinates.append({'lng': float(parts[0]), 'lat': float(parts[1])})
             
-            # Tentukan type dari name/description/folder
-            feature_type = "Other"
-            type_keywords = {
-                'monumen': 'Monument',
-                'monas': 'Monument', 
-                'taman': 'Park',
-                'park': 'Park',
-                'museum': 'Museum',
-                'sejarah': 'Historical',
-                'historical': 'Historical',
-                'jalan': 'Road',
-                'road': 'Road',
-                'street': 'Road',
-                'sungai': 'River',
-                'river': 'River',
-                'batas': 'Boundary',
-                'boundary': 'Boundary'
-            }
+            # Tentukan deployment type berdasarkan nama dan folder
+            deployment_type = "Other"
             
-            for keyword, type_name in type_keywords.items():
-                if keyword in name.lower() or keyword in description.lower() or keyword in folder_path.lower():
-                    feature_type = type_name
-                    break
+            # Pattern matching untuk deployment SERANG
+            if re.search(r'MTEL-SERANG-Q3AOP2023-DF002', name) or any(re.search(r'MODF-R04-CLG0-R005-S\d+', name) for coord in coordinates):
+                deployment_type = "DF002"
+            elif re.search(r'MTEL-SERANG-Q3AOP2023-DF002A', name) or any(re.search(r'MODF-R04-CLG0-R008-S\d+', name) for coord in coordinates):
+                deployment_type = "DF002A"
+            elif re.search(r'MTEL-SERANG-Q3AOP2023-DF004A', name) or any(re.search(r'MODF-R04-CLG0-R007-S\d+', name) for coord in coordinates):
+                deployment_type = "DF004A"
+            elif "SERANG" in folder_path.upper():
+                deployment_type = "SERANG_Other"
             
             features.append({
                 'name': name,
                 'description': description,
-                'type': feature_type,
+                'type': deployment_type,
                 'geometry_type': geometry_type,
                 'coordinates': coordinates,
                 'folder': folder_path,
-                'full_path': folder_path + " > " + name if folder_path else name
+                'full_path': folder_path + " > " + name if folder_path else name,
+                'deployment_id': deployment_type
             })
         
         def process_folder(folder_elem, current_path=""):
@@ -185,65 +190,109 @@ def parse_kml_with_folders(kml_content):
         st.error(f"Error parsing KML: {str(e)}")
         return None
 
-def create_sample_data():
-    """Membuat data sampel dengan berbagai tipe geometri"""
+def create_serang_sample_data():
+    """Membuat data sampel dengan struktur SERANG Deployment"""
     features = []
     
-    # Points
-    points_data = [
-        {'name': 'Monumen Nasional', 'type': 'Monument', 'lat': -6.1754, 'lng': 106.8272, 'folder': 'Landmark > Monumen'},
-        {'name': 'Bundaran HI', 'type': 'Landmark', 'lat': -6.1963, 'lng': 106.8229, 'folder': 'Landmark'},
-        {'name': 'Taman Mini', 'type': 'Park', 'lat': -6.3024, 'lng': 106.8952, 'folder': 'Wisata > Taman'},
+    # DF002 Deployment
+    df002_points = [
+        {'name': 'MTEL-SERANG-Q3AOP2023-DF002', 'lat': -6.120, 'lng': 106.150, 'site': 'Main Site'},
+        {'name': 'MODF-R04-CLG0-R005-S008', 'lat': -6.121, 'lng': 106.151, 'site': 'Site 008'},
+        {'name': 'MODF-R04-CLG0-R005-S01', 'lat': -6.122, 'lng': 106.152, 'site': 'Site 01'},
+        {'name': 'MODF-R04-CLG0-R005-S03', 'lat': -6.123, 'lng': 106.153, 'site': 'Site 03'},
+        {'name': 'MODF-R04-CLG0-R005-S02', 'lat': -6.124, 'lng': 106.154, 'site': 'Site 02'},
     ]
     
-    for point in points_data:
+    for point in df002_points:
         features.append({
             'name': point['name'],
-            'description': f"Deskripsi {point['name']}",
-            'type': point['type'],
+            'description': f"SERANG Deployment - {point['site']}",
+            'type': 'DF002',
             'geometry_type': 'Point',
             'coordinates': [{'lng': point['lng'], 'lat': point['lat']}],
-            'folder': point['folder'],
-            'full_path': point['folder'] + " > " + point['name']
+            'folder': 'SERANG > Deployment > DF002',
+            'full_path': f"SERANG > Deployment > DF002 > {point['name']}",
+            'deployment_id': 'DF002'
         })
     
-    # LineStrings (jalan)
-    lines_data = [
+    # DF002A Deployment
+    df002a_points = [
+        {'name': 'MTEL-SERANG-Q3AOP2023-DF002A', 'lat': -6.115, 'lng': 106.145, 'site': 'Main Site A'},
+        {'name': 'MODF-R04-CLG0-R005-S004', 'lat': -6.116, 'lng': 106.146, 'site': 'Site 004'},
+        {'name': 'MODF-R04-CLG0-R008-S01', 'lat': -6.117, 'lng': 106.147, 'site': 'Site 01'},
+    ]
+    
+    for point in df002a_points:
+        features.append({
+            'name': point['name'],
+            'description': f"SERANG Deployment - {point['site']}",
+            'type': 'DF002A',
+            'geometry_type': 'Point',
+            'coordinates': [{'lng': point['lng'], 'lat': point['lat']}],
+            'folder': 'SERANG > Deployment > DF002A',
+            'full_path': f"SERANG > Deployment > DF002A > {point['name']}",
+            'deployment_id': 'DF002A'
+        })
+    
+    # DF004A Deployment
+    df004a_points = [
+        {'name': 'MTEL-SERANG-Q3AOP2023-DF004A', 'lat': -6.110, 'lng': 106.140, 'site': 'Main Site B'},
+        {'name': 'MODF-R04-CLG0-R007-S02', 'lat': -6.111, 'lng': 106.141, 'site': 'Site 02'},
+        {'name': 'MODF-R04-CLG0-R007-S03', 'lat': -6.112, 'lng': 106.142, 'site': 'Site 03'},
+        {'name': 'MODF-R04-CLG0-R007-S01', 'lat': -6.113, 'lng': 106.143, 'site': 'Site 01'},
+    ]
+    
+    for point in df004a_points:
+        features.append({
+            'name': point['name'],
+            'description': f"SERANG Deployment - {point['site']}",
+            'type': 'DF004A',
+            'geometry_type': 'Point',
+            'coordinates': [{'lng': point['lng'], 'lat': point['lat']}],
+            'folder': 'SERANG > Deployment > DF004A',
+            'full_path': f"SERANG > Deployment > DF004A > {point['name']}",
+            'deployment_id': 'DF004A'
+        })
+    
+    # Tambahkan LineString untuk fiber optic routes
+    fiber_routes = [
         {
-            'name': 'Jalan Sudirman', 
-            'type': 'Road',
+            'name': 'Fiber Route DF002', 
+            'type': 'DF002',
             'coordinates': [
-                {'lng': 106.815, 'lat': -6.190}, {'lng': 106.820, 'lat': -6.195},
-                {'lng': 106.825, 'lat': -6.200}, {'lng': 106.830, 'lat': -6.205}
+                {'lng': 106.150, 'lat': -6.120}, {'lng': 106.151, 'lat': -6.121},
+                {'lng': 106.152, 'lat': -6.122}, {'lng': 106.153, 'lat': -6.123},
+                {'lng': 106.154, 'lat': -6.124}
             ],
-            'folder': 'Infrastruktur > Jalan'
+            'folder': 'SERANG > Deployment > DF002 > Fiber Routes'
         },
         {
-            'name': 'Jalan Thamrin',
-            'type': 'Road', 
+            'name': 'Fiber Route DF002A',
+            'type': 'DF002A', 
             'coordinates': [
-                {'lng': 106.818, 'lat': -6.185}, {'lng': 106.823, 'lat': -6.190},
-                {'lng': 106.828, 'lat': -6.195}
+                {'lng': 106.145, 'lat': -6.115}, {'lng': 106.146, 'lat': -6.116},
+                {'lng': 106.147, 'lat': -6.117}
             ],
-            'folder': 'Infrastruktur > Jalan'
+            'folder': 'SERANG > Deployment > DF002A > Fiber Routes'
         }
     ]
     
-    for line in lines_data:
+    for route in fiber_routes:
         features.append({
-            'name': line['name'],
-            'description': f"Jalan utama {line['name']}",
-            'type': line['type'],
+            'name': route['name'],
+            'description': f"Fiber Optic Route - {route['type']}",
+            'type': route['type'],
             'geometry_type': 'LineString',
-            'coordinates': line['coordinates'],
-            'folder': line['folder'],
-            'full_path': line['folder'] + " > " + line['name']
+            'coordinates': route['coordinates'],
+            'folder': route['folder'],
+            'full_path': route['folder'] + " > " + route['name'],
+            'deployment_id': route['type']
         })
     
     return pd.DataFrame(features)
 
-def create_base_map(location=[-6.2088, 106.8456], zoom_start=11):
-    """Membuat peta dasar"""
+def create_base_map(location=[-6.115, 106.148], zoom_start=13):
+    """Membuat peta dasar untuk area SERANG"""
     return folium.Map(
         location=location,
         zoom_start=zoom_start,
@@ -251,57 +300,49 @@ def create_base_map(location=[-6.2088, 106.8456], zoom_start=11):
         control_scale=True
     )
 
-def get_color_from_type(feature_type):
-    """Mengembalikan warna berdasarkan jenis fitur"""
+def get_color_from_deployment(deployment_id):
+    """Mengembalikan warna berdasarkan deployment ID"""
     color_map = {
-        'Monument': 'red',
-        'Landmark': 'darkred',
-        'Park': 'green',
-        'Road': 'blue',
-        'River': 'lightblue',
-        'Boundary': 'orange',
-        'Historical': 'purple',
-        'Museum': 'cadetblue',
+        'DF002': 'red',
+        'DF002A': 'blue',
+        'DF004A': 'green',
+        'SERANG_Other': 'orange',
         'Other': 'gray'
     }
-    return color_map.get(feature_type, 'gray')
+    return color_map.get(deployment_id, 'gray')
 
-def get_icon_from_type(feature_type):
-    """Mengembalikan ikon berdasarkan jenis fitur"""
+def get_icon_from_deployment(deployment_id):
+    """Mengembalikan ikon berdasarkan deployment ID"""
     icon_map = {
-        'Monument': 'info-sign',
-        'Landmark': 'flag',
-        'Park': 'tree-conifer',
-        'Road': 'road',
-        'River': 'tint',
-        'Boundary': 'resize-horizontal',
-        'Historical': 'bookmark',
-        'Museum': 'education',
-        'Other': 'info-sign'
+        'DF002': 'signal',
+        'DF002A': 'flash',
+        'DF004A': 'off',
+        'SERANG_Other': 'info-sign',
+        'Other': 'question-sign'
     }
-    return icon_map.get(feature_type, 'info-sign')
+    return icon_map.get(deployment_id, 'info-sign')
 
 def main():
     # Header
-    st.markdown('<h1 class="main-header">🌍 Web GIS dengan KML Interaktif</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header">🌍 Web GIS SERANG Deployment</h1>', unsafe_allow_html=True)
     
-    # Initialize session state untuk data yang diklik
+    # Initialize session state
     if 'clicked_feature' not in st.session_state:
         st.session_state.clicked_feature = None
     
     # Sidebar
     with st.sidebar:
-        st.markdown('<h2 class="sidebar-header">📁 Upload File KML</h2>', unsafe_allow_html=True)
+        st.markdown('<h2 class="sidebar-header">📁 Upload File KML SERANG</h2>', unsafe_allow_html=True)
         
         # Upload file KML
-        uploaded_file = st.file_uploader("Pilih file KML", type=['kml'], key="kml_uploader")
+        uploaded_file = st.file_uploader("Pilih file KML SERANG", type=['kml'], key="kml_uploader")
         
         df = None
         
         if uploaded_file is not None:
             # Baca konten file
             kml_content = uploaded_file.read().decode('utf-8')
-            df = parse_kml_with_folders(kml_content)
+            df = parse_kml_with_serang_structure(kml_content)
             if df is not None:
                 st.success(f"✅ File KML berhasil dimuat! {len(df)} fitur ditemukan.")
         else:
@@ -310,22 +351,22 @@ def main():
                 if os.path.exists('zxcmcnc.kml'):
                     with open('zxcmcnc.kml', 'r', encoding='utf-8') as f:
                         kml_content = f.read()
-                    df = parse_kml_with_folders(kml_content)
+                    df = parse_kml_with_serang_structure(kml_content)
                     if df is not None:
                         st.success(f"✅ File zxcmcnc.kml berhasil dimuat! {len(df)} fitur ditemukan.")
                 else:
-                    st.info("📝 Upload file KML atau gunakan data sampel")
+                    st.info("📝 Upload file KML atau gunakan data sampel SERANG")
             except Exception as e:
                 st.warning(f"Tidak bisa membaca zxcmcnc.kml: {str(e)}")
         
         # Tombol data sampel
         if df is None:
-            if st.button("Gunakan Data Sampel"):
-                df = create_sample_data()
-                st.success(f"✅ Data sampel dimuat! {len(df)} fitur ditemukan.")
+            if st.button("Gunakan Data Sampel SERANG"):
+                df = create_serang_sample_data()
+                st.success(f"✅ Data sampel SERANG dimuat! {len(df)} fitur ditemukan.")
         
         if df is not None:
-            st.markdown('<h2 class="sidebar-header">🎛️ Kontrol Tampilan</h2>', unsafe_allow_html=True)
+            st.markdown('<h2 class="sidebar-header">🎛️ Kontrol Deployment</h2>', unsafe_allow_html=True)
             
             # Pilihan layer dasar
             basemap = st.selectbox(
@@ -335,54 +376,72 @@ def main():
             
             # Kontrol tampilan
             st.markdown("**Tampilan Fitur:**")
-            show_markers = st.checkbox("Tampilkan Marker", value=True)
-            show_lines = st.checkbox("Tampilkan LineString", value=True)
+            show_markers = st.checkbox("Tampilkan Site Points", value=True)
+            show_lines = st.checkbox("Tampilkan Fiber Routes", value=True)
             show_popups = st.checkbox("Tampilkan Popup Info", value=True)
-            show_heatmap = st.checkbox("Tampilkan Heatmap", value=False)
             
-            # Filter berdasarkan folder
-            st.markdown("**Filter berdasarkan Folder:**")
+            # Filter berdasarkan Deployment ID
+            st.markdown("**Pilih Deployment:**")
+            deployment_options = ["Semua Deployment"] + sorted(df['deployment_id'].unique().tolist())
+            selected_deployment = st.selectbox(
+                "Pilih deployment:",
+                deployment_options
+            )
+            
+            # Filter berdasarkan tipe geometri
+            st.markdown("**Filter Tipe:**")
+            col1, col2 = st.columns(2)
+            with col1:
+                show_points = st.checkbox("Points", value=True)
+            with col2:
+                show_linestrings = st.checkbox("Lines", value=True)
+            
+            # Filter berdasarkan folder SERANG
+            st.markdown("**Struktur Folder SERANG:**")
             if 'folder' in df.columns:
-                all_folders = ["Semua Folder"] + sorted(df['folder'].unique().tolist())
+                serang_folders = [f for f in df['folder'].unique() if 'SERANG' in f.upper()]
+                folder_options = ["Semua Folder"] + sorted(serang_folders)
                 selected_folder = st.selectbox(
                     "Pilih folder:",
-                    all_folders
+                    folder_options
                 )
             else:
                 selected_folder = "Semua Folder"
             
-            # Filter berdasarkan jenis geometri
-            st.markdown("**Filter berdasarkan Tipe Geometri:**")
-            geometry_types = ["Semua"] + sorted(df['geometry_type'].unique().tolist())
-            selected_geometry = st.selectbox(
-                "Pilih tipe geometri:",
-                geometry_types
-            )
-            
-            # Filter berdasarkan jenis fitur
-            st.markdown("**Filter berdasarkan Jenis Fitur:**")
-            feature_types = ["Semua"] + sorted(df['type'].unique().tolist())
-            selected_feature_type = st.selectbox(
-                "Pilih jenis fitur:",
-                feature_types
-            )
+            # Tampilkan struktur deployment
+            st.markdown("#### 📋 Struktur Deployment")
+            st.markdown("""
+            <div class="folder-structure">
+            <b>SERANG Deployment Structure:</b><br>
+            • DF002 (5 sites)<br>
+            • DF002A (3 sites)<br> 
+            • DF004A (4 sites)<br>
+            • Fiber Routes
+            </div>
+            """, unsafe_allow_html=True)
     
     # Layout utama
     if df is not None:
         # Filter data
         filtered_df = df.copy()
         
+        # Filter berdasarkan deployment
+        if selected_deployment != "Semua Deployment":
+            filtered_df = filtered_df[filtered_df['deployment_id'] == selected_deployment]
+        
         # Filter berdasarkan folder
         if selected_folder != "Semua Folder":
             filtered_df = filtered_df[filtered_df['folder'] == selected_folder]
         
         # Filter berdasarkan tipe geometri
-        if selected_geometry != "Semua":
-            filtered_df = filtered_df[filtered_df['geometry_type'] == selected_geometry]
+        geometry_filters = []
+        if show_points:
+            geometry_filters.append('Point')
+        if show_linestrings:
+            geometry_filters.append('LineString')
         
-        # Filter berdasarkan jenis fitur
-        if selected_feature_type != "Semua":
-            filtered_df = filtered_df[filtered_df['type'] == selected_feature_type]
+        if geometry_filters:
+            filtered_df = filtered_df[filtered_df['geometry_type'].isin(geometry_filters)]
         
         col1, col2 = st.columns([2, 1])
         
@@ -402,16 +461,29 @@ def main():
             
             # Tambahkan fitur ke peta
             for idx, row in filtered_df.iterrows():
-                feature_data = row.to_dict()
+                feature_data = {
+                    'name': row['name'],
+                    'type': row['type'],
+                    'deployment_id': row['deployment_id'],
+                    'geometry_type': row['geometry_type'],
+                    'folder': row['folder'],
+                    'coordinates': row['coordinates']
+                }
                 
                 # Konten popup
                 popup_content = f"""
-                <div style='min-width:250px'>
-                    <h4>{row['name']}</h4>
+                <div style='min-width:280px; font-family: Arial, sans-serif;'>
+                    <h4 style='color: {get_color_from_deployment(row["deployment_id"])}; margin-bottom: 10px;'>
+                        {row['name']}
+                    </h4>
+                    <b>Deployment:</b> {row['deployment_id']}<br>
                     <b>Type:</b> {row['type']}<br>
                     <b>Geometry:</b> {row['geometry_type']}<br>
                     <b>Folder:</b> {row['folder']}<br>
-                    <button onclick="window.parent.postMessage({{'type': 'feature_click', 'data': {feature_data}}}, '*')">
+                    <hr style='margin: 8px 0;'>
+                    <button onclick="alert('Feature: {row['name']}')" 
+                            style='background-color: {get_color_from_deployment(row["deployment_id"])}; 
+                                   color: white; border: none; padding: 5px 10px; border-radius: 3px; cursor: pointer;'>
                         Lihat Detail
                     </button>
                 </div>
@@ -421,17 +493,15 @@ def main():
                 if row['geometry_type'] == 'Point' and show_markers and len(row['coordinates']) > 0:
                     # Tambahkan marker untuk Point
                     coord = row['coordinates'][0]
-                    color = get_color_from_type(row['type'])
-                    icon = get_icon_from_type(row['type'])
+                    color = get_color_from_deployment(row['deployment_id'])
+                    icon = get_icon_from_deployment(row['deployment_id'])
                     
                     marker = folium.Marker(
                         location=[coord['lat'], coord['lng']],
-                        popup=folium.Popup(popup_content, max_width=300) if show_popups else None,
-                        tooltip=row['name'],
+                        popup=folium.Popup(popup_content, max_width=350) if show_popups else None,
+                        tooltip=f"{row['deployment_id']}: {row['name']}",
                         icon=folium.Icon(color=color, icon=icon, prefix='glyphicon')
                     )
-                    
-                    # Tambahkan click handler
                     marker.add_to(m)
                 
                 elif row['geometry_type'] == 'LineString' and show_lines and len(row['coordinates']) > 1:
@@ -440,38 +510,13 @@ def main():
                     
                     folium.PolyLine(
                         locations=line_coords,
-                        popup=folium.Popup(popup_content, max_width=300) if show_popups else None,
-                        tooltip=row['name'],
-                        color=get_color_from_type(row['type']),
-                        weight=4,
-                        opacity=0.7
+                        popup=folium.Popup(popup_content, max_width=350) if show_popups else None,
+                        tooltip=f"{row['deployment_id']}: {row['name']}",
+                        color=get_color_from_deployment(row['deployment_id']),
+                        weight=5,
+                        opacity=0.8,
+                        dash_array='5, 5' if 'Fiber' in row['name'] else None
                     ).add_to(m)
-                
-                elif row['geometry_type'] == 'Polygon' and len(row['coordinates']) > 2:
-                    # Tambahkan polygon
-                    poly_coords = [[coord['lat'], coord['lng']] for coord in row['coordinates']]
-                    
-                    folium.Polygon(
-                        locations=poly_coords,
-                        popup=folium.Popup(popup_content, max_width=300) if show_popups else None,
-                        tooltip=row['name'],
-                        color=get_color_from_type(row['type']),
-                        fill=True,
-                        fillOpacity=0.2,
-                        weight=2
-                    ).add_to(m)
-            
-            # Tambahkan heatmap untuk points saja
-            if show_heatmap:
-                from folium.plugins import HeatMap
-                heat_data = []
-                for idx, row in filtered_df.iterrows():
-                    if row['geometry_type'] == 'Point' and len(row['coordinates']) > 0:
-                        coord = row['coordinates'][0]
-                        heat_data.append([coord['lat'], coord['lng'], 1])
-                
-                if heat_data:
-                    HeatMap(heat_data, radius=15, blur=10).add_to(m)
             
             # Tambahkan kontrol
             from folium.plugins import MeasureControl, Fullscreen
@@ -479,48 +524,51 @@ def main():
             Fullscreen().add_to(m)
             
             # Tampilkan peta
-            st.markdown("### 🗺️ Peta Interaktif")
+            st.markdown("### 🗺️ Peta Deployment SERANG")
             map_data = st_folium(
                 m, 
                 width=700, 
                 height=600, 
-                key="main_map",
-                returned_objects=["last_clicked", "last_object_clicked"]
+                key="main_map"
             )
             
-            # Handle feature clicks dari popup
-            if map_data.get('last_object_clicked'):
-                clicked_popup = map_data['last_object_clicked'].get('popup')
-                if clicked_popup:
-                    # Simpan data yang diklik ke session state
-                    try:
-                        # Extract data dari popup (ini adalah simplified version)
-                        # Dalam implementasi real, Anda perlu mengirim data melalui JavaScript
-                        st.session_state.clicked_feature = {
-                            'name': 'Feature dari Peta',
-                            'coordinates': map_data['last_clicked']
-                        }
-                    except:
-                        pass
+            # Handle clicks
+            if map_data.get('last_clicked'):
+                clicked_coord = map_data['last_clicked']
+                # Cari fitur terdekat
+                min_distance = float('inf')
+                closest_feature = None
+                
+                for idx, row in filtered_df.iterrows():
+                    if row['geometry_type'] == 'Point' and len(row['coordinates']) > 0:
+                        coord = row['coordinates'][0]
+                        distance = ((coord['lat'] - clicked_coord['lat'])**2 + 
+                                  (coord['lng'] - clicked_coord['lng'])**2)**0.5
+                        if distance < min_distance and distance < 0.001:  # Threshold ~100m
+                            min_distance = distance
+                            closest_feature = row
+                
+                if closest_feature is not None:
+                    st.session_state.clicked_feature = closest_feature.to_dict()
             
             # Info klik koordinat
             if map_data.get('last_clicked'):
-                st.info(f"📍 Koordinat terklik: {map_data['last_clicked']}")
+                st.info(f"📍 Koordinat: {map_data['last_clicked']}")
         
         with col2:
-            st.markdown("### 📊 Informasi Data")
+            st.markdown("### 📊 Dashboard SERANG")
             
             # Tampilkan info feature yang diklik
             if st.session_state.clicked_feature:
-                st.markdown("#### 🎯 Fitur yang Diklik")
                 feature = st.session_state.clicked_feature
+                st.markdown("#### 🎯 Site Terpilih")
                 st.markdown(f"""
                 <div class="clicked-info">
-                    <h4>{feature.get('name', 'Unknown Feature')}</h4>
+                    <h4>{feature.get('name', 'Unknown')}</h4>
+                    <b>Deployment ID:</b> {feature.get('deployment_id', 'Unknown')}<br>
                     <b>Type:</b> {feature.get('type', 'Unknown')}<br>
                     <b>Geometry:</b> {feature.get('geometry_type', 'Unknown')}<br>
                     <b>Folder:</b> {feature.get('folder', 'Unknown')}<br>
-                    <b>Coordinates:</b> {feature.get('coordinates', 'No coordinates')}
                 </div>
                 """, unsafe_allow_html=True)
                 
@@ -528,76 +576,91 @@ def main():
                     st.session_state.clicked_feature = None
                     st.rerun()
             else:
-                st.info("👆 Klik pada fitur di peta untuk melihat detail")
+                st.info("👆 Klik pada site di peta untuk melihat detail")
             
-            # Metrics
-            col_metric1, col_metric2 = st.columns(2)
-            with col_metric1:
-                st.metric("Total Fitur", len(df))
-                st.metric("Points", len(df[df['geometry_type'] == 'Point']))
+            # Statistics
+            st.markdown("#### 📈 Statistik Deployment")
+            col_stat1, col_stat2 = st.columns(2)
             
-            with col_metric2:
-                st.metric("Ditampilkan", len(filtered_df))
-                st.metric("Lines", len(df[df['geometry_type'] == 'LineString']))
+            with col_stat1:
+                total_sites = len(df[df['geometry_type'] == 'Point'])
+                st.metric("Total Sites", total_sites)
+                
+                df002_sites = len(df[(df['deployment_id'] == 'DF002') & (df['geometry_type'] == 'Point')])
+                st.metric("DF002 Sites", df002_sites)
             
-            # Statistik folder
-            st.markdown("#### 📁 Struktur Folder")
-            if 'folder' in df.columns:
-                folder_stats = df['folder'].value_counts().head(5)
-                for folder, count in folder_stats.items():
-                    st.write(f"📂 **{folder}**: {count} fitur")
+            with col_stat2:
+                displayed_sites = len(filtered_df[filtered_df['geometry_type'] == 'Point'])
+                st.metric("Ditampilkan", displayed_sites)
+                
+                df004a_sites = len(df[(df['deployment_id'] == 'DF004A') & (df['geometry_type'] == 'Point')])
+                st.metric("DF004A Sites", df004a_sites)
             
-            # Statistik tipe geometri
-            st.markdown("#### 📐 Tipe Geometri")
-            geom_stats = df['geometry_type'].value_counts()
-            for geom_type, count in geom_stats.items():
-                st.write(f"🔷 **{geom_type}**: {count} fitur")
+            # Deployment breakdown
+            st.markdown("#### 🏗️ Breakdown Deployment")
+            for deployment in ['DF002', 'DF002A', 'DF004A']:
+                deployment_count = len(filtered_df[filtered_df['deployment_id'] == deployment])
+                if deployment_count > 0:
+                    sites_count = len(filtered_df[(filtered_df['deployment_id'] == deployment) & 
+                                                (filtered_df['geometry_type'] == 'Point')])
+                    lines_count = len(filtered_df[(filtered_df['deployment_id'] == deployment) & 
+                                                (filtered_df['geometry_type'] == 'LineString')])
+                    
+                    st.markdown(f"""
+                    <div class="deployment-item">
+                        <b>{deployment}</b>: {deployment_count} fitur<br>
+                        <small>📍 {sites_count} sites | 📏 {lines_count} routes</small>
+                    </div>
+                    """, unsafe_allow_html=True)
             
-            # Daftar fitur yang ditampilkan
-            st.markdown("#### 🎯 Fitur yang Ditampilkan")
-            for idx, row in filtered_df.head(6).iterrows():
-                icon = "📍" if row['geometry_type'] == 'Point' else "📏" if row['geometry_type'] == 'LineString' else "🔷"
+            # Daftar sites yang ditampilkan
+            st.markdown("#### 📋 Daftar Sites")
+            points_df = filtered_df[filtered_df['geometry_type'] == 'Point'].head(8)
+            
+            for idx, row in points_df.iterrows():
+                color = get_color_from_deployment(row['deployment_id'])
                 st.markdown(f"""
                 <div class="feature-item">
-                    {icon} <b>{row['name']}</b><br>
-                    <small>{row['type']} | {row['geometry_type']} | {row['folder']}</small>
+                    <span style='color: {color}; font-weight: bold;'>●</span> 
+                    <b>{row['name']}</b><br>
+                    <small>{row['deployment_id']} | {row['folder'].split('>')[-1].strip()}</small>
                 </div>
                 """, unsafe_allow_html=True)
             
-            if len(filtered_df) > 6:
-                st.info(f"Menampilkan 6 dari {len(filtered_df)} fitur")
+            if len(points_df) == 0:
+                st.info("Tidak ada sites yang sesuai dengan filter")
     
     else:
         # Tampilan awal
         st.info("""
-        ## 📝 Instruksi Penggunaan
+        ## 📝 Web GIS SERANG Deployment
         
-        1. **Upload file KML** Anda melalui sidebar
-        2. Atau letakkan file `zxcmcnc.kml` di folder yang sama
-        3. Atau gunakan **data sampel**
+        **Struktur Deployment yang Didukung:**
         
-        ### 🆕 Fitur Baru:
-        - ✅ **Info saat diklik** - Detail fitur yang diklik
-        - ✅ **LineString support** - Menampilkan garis/jalan
-        - ✅ **Filter folder** - Pilih data berdasarkan struktur folder KML
-        - ✅ **Multiple geometry types** - Point, LineString, Polygon
+        ### 🎯 DF002 Deployment
+        - MTEL-SERANG-Q3AOP2023-DF002
+        - MODF-R04-CLG0-R005-S008
+        - MODF-R04-CLG0-R005-S01  
+        - MODF-R04-CLG0-R005-S03
+        - MODF-R04-CLG0-R005-S02
+        
+        ### 🔵 DF002A Deployment  
+        - MTEL-SERANG-Q3AOP2023-DF002A
+        - MODF-R04-CLG0-R005-S004
+        - MODF-R04-CLG0-R008-S01
+        
+        ### 🟢 DF004A Deployment
+        - MTEL-SERANG-Q3AOP2023-DF004A
+        - MODF-R04-CLG0-R007-S02
+        - MODF-R04-CLG0-R007-S03
+        - MODF-R04-CLG0-R007-S01
+        
+        Upload file KML Anda atau gunakan data sampel!
         """)
         
         # Peta kosong
         m = create_base_map()
         st_folium(m, width=800, height=500)
-
-# JavaScript untuk handle click events
-st.markdown("""
-<script>
-window.addEventListener('message', function(event) {
-    if (event.data.type === 'feature_click') {
-        // Handle feature click dari popup
-        console.log('Feature clicked:', event.data.data);
-    }
-});
-</script>
-""", unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
