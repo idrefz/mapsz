@@ -5,3 +5,4 @@ pandas
 shapely
 numpy
 requests
+fiona
