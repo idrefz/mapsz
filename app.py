@@ -354,7 +354,7 @@ def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15, radius_km=5):
         folium.Marker(
             location=center_loc,
             icon=folium.DivIcon(
-                html='<div style="background-color: white; padding: 10px; border: 3px solid #007cba; border-radius: 8px; font-size: 14px; font-weight: bold; color: #007cba;">📍 </div>'
+                html='<div style="background-color: white; padding: 10px; border: 3px solid #007cba; border-radius: 8px; font-size: 14px; font-weight: bold; color: #007cba;">📍 KLIK DI PETA UNTUK PILIH LOKASI GANGGUAN</div>'
             )
         ).add_to(m)
         
@@ -428,12 +428,58 @@ def analyze_from_map_click(click_data, radius_km):
                     gangguan_point, 
                     radius_km
                 )
+            # Apply filters from sidebar
+            try:
+                st.session_state.gdf_nearby = apply_filters(
+                    st.session_state.gdf_nearby,
+                    st.session_state.get('name_filter', ''),
+                    st.session_state.get('name_list', []),
+                    locals().get('source_col', None),
+                    st.session_state.get('source_filter', [])
+                )
+            except Exception:
+                pass
             
             return True
         return False
     except Exception as e:
         st.error(f"Analysis error: {e}")
         return False
+
+
+def apply_filters(gdf, name_filter_text, name_exact_list, source_col_name, source_filter_list):
+    """Apply name substring, exact name list and source layer filters to a GeoDataFrame."""
+    if gdf is None or gdf.empty:
+        return gdf
+
+    out = gdf.copy()
+
+    # name substring filter
+    if name_filter_text and name_filter_text.strip():
+        s = name_filter_text.strip().lower()
+        # apply to any name-like column
+        name_cols = [c for c in out.columns if 'name' in c.lower()]
+        if name_cols:
+            mask = False
+            for nc in name_cols:
+                mask = mask | out[nc].astype(str).str.lower().str.contains(s, na=False)
+            out = out[mask]
+
+    # exact name list (multi-select)
+    if name_exact_list:
+        name_cols = [c for c in out.columns if 'name' in c.lower()]
+        if name_cols:
+            nc = name_cols[0]
+            out = out[out[nc].isin(name_exact_list)]
+
+    # source layer filter (multi-select)
+    if source_filter_list and source_col_name:
+        try:
+            out = out[out[source_col_name].astype(str).isin(source_filter_list)]
+        except Exception:
+            pass
+
+    return out
 
 # UI Streamlit
 st.title("🚨 GIS KML Quick Response - ULTIMATE")
@@ -474,6 +520,45 @@ with st.sidebar:
     
     st.markdown("---")
     zoom_level = st.slider("Zoom Level Peta", 10, 18, 15, key="zoom_input")
+
+    # Filters: name contains and source layer
+    name_filter = st.text_input("Filter by name (contains)", value="", key="name_filter")
+
+    # provide multiselect of exact names if available
+    name_values = []
+    if st.session_state.get('gdf_master') is not None:
+        # detect name-like columns
+        name_cols_cand = [c for c in st.session_state.gdf_master.columns if 'name' in c.lower()]
+        if name_cols_cand:
+            try:
+                name_col_for_list = name_cols_cand[0]
+                name_values = sorted([str(x) for x in st.session_state.gdf_master[name_col_for_list].dropna().unique()])
+            except Exception:
+                name_values = []
+
+    if name_values:
+        name_list = st.multiselect("Filter by exact name (multi)", options=name_values, default=[], key="name_list")
+    else:
+        name_list = []
+
+    # detect possible source column values (only if master loaded)
+    source_col = None
+    source_values = []
+    if st.session_state.get('gdf_master') is not None:
+        candidates = ['source_layer', 'source', 'layer', 'folder', 'layer_name']
+        for c in candidates:
+            if c in st.session_state.gdf_master.columns:
+                source_col = c
+                try:
+                    source_values = sorted([str(x) for x in st.session_state.gdf_master[c].dropna().unique()])
+                except Exception:
+                    source_values = []
+                break
+
+    if source_col and source_values:
+        source_filter = st.multiselect("Filter by source layer (multi)", options=source_values, default=[], key="source_filter")
+    else:
+        source_filter = []
 
 # Load master KML
 if st.session_state.gdf_master is None:
@@ -522,6 +607,17 @@ if st.session_state.gdf_master is not None and not st.session_state.gdf_master.e
                 gangguan_point, 
                 radius_km
             )
+        # apply sidebar filters
+        try:
+            st.session_state.gdf_nearby = apply_filters(
+                st.session_state.gdf_nearby,
+                st.session_state.get('name_filter', ''),
+                st.session_state.get('name_list', []),
+                source_col,
+                st.session_state.get('source_filter', [])
+            )
+        except Exception:
+            pass
         st.rerun()
     
     # Show click info
