@@ -339,7 +339,7 @@ def create_detailed_popup(row):
     except Exception as e:
         return f"<div>Popup error: {str(e)}</div>"
 
-def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15):
+def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15, radius_km=5):
     """Membuat peta interaktif"""
     try:
         if gangguan_coords:
@@ -373,7 +373,7 @@ def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15):
                 fill=True,
                 fillColor='red',
                 fillOpacity=0.1,
-                popup=f"Area Pencarian ({radius_km}km)"
+                popup=f"Area Pencarian ({radius_km} km)"
             ).add_to(m)
         
         # Tambahkan features
@@ -445,7 +445,7 @@ with st.sidebar:
     st.markdown("---")
     
     st.subheader("🎯 Klik di Peta")
-    st.info("Klik langsung di peta untuk memilih lokasi gangguan")
+    st.info("")
     
     st.subheader("📝 Input Manual")
     col1, col2 = st.columns(2)
