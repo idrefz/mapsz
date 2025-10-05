@@ -354,7 +354,6 @@ def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15, radius_km=5):
         folium.Marker(
             location=center_loc,
             icon=folium.DivIcon(
-                html='<div style="background-color: white; padding: 10px; border: 3px solid #007cba; border-radius: 8px; font-size: 14px; font-weight: bold; color: #007cba;">📍 KLIK DI PETA UNTUK PILIH LOKASI GANGGUAN</div>'
             )
         ).add_to(m)
         
