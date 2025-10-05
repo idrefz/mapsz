@@ -2,13 +2,10 @@ import streamlit as st
 import folium
 from streamlit_folium import st_folium
 import pandas as pd
-import geopandas as gpd
-from shapely.geometry import Point, Polygon
 import numpy as np
 import requests
-import json
-from folium.plugins import MeasureControl, Fullscreen, MarkerCluster, HeatMap
 import xml.etree.ElementTree as ET
+from io import StringIO
 import tempfile
 import os
 
@@ -40,14 +37,6 @@ st.markdown("""
         border-radius: 10px;
         margin: 1rem 0;
     }
-    .metric-box {
-        background-color: #ffffff;
-        padding: 0.8rem;
-        border-radius: 8px;
-        border-left: 4px solid #1f77b4;
-        margin: 0.5rem 0;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
     .feature-item {
         background-color: #f8f9fa;
         padding: 0.8rem;
@@ -55,35 +44,80 @@ st.markdown("""
         border-radius: 5px;
         border-left: 3px solid #28a745;
     }
-    .stCheckbox > label {
-        font-weight: 500;
-    }
 </style>
 """, unsafe_allow_html=True)
 
-def parse_kml_file(kml_file):
-    """Parse file KML dan ekstrak fitur-fitur"""
+def parse_kml_simple(kml_content):
+    """Parse KML secara sederhana tanpa geopandas"""
     try:
-        # Simpan file upload sementara
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.kml') as tmp_file:
-            tmp_file.write(kml_file.getvalue())
-            tmp_path = tmp_file.name
+        names = []
+        descriptions = []
+        types = []
+        latitudes = []
+        longitudes = []
         
-        # Baca KML dengan geopandas
-        gdf = gpd.read_file(tmp_path, driver='KML')
+        root = ET.fromstring(kml_content)
         
-        # Bersihkan file temporary
-        os.unlink(tmp_path)
+        # Namespace KML
+        ns = {'kml': 'http://www.opengis.net/kml/2.2'}
         
-        return gdf
+        # Cari semua Placemark
+        for placemark in root.findall('.//kml:Placemark', ns):
+            # Extract name
+            name_elem = placemark.find('kml:name', ns)
+            name = name_elem.text if name_elem is not None else "Unnamed"
+            
+            # Extract description
+            desc_elem = placemark.find('kml:description', ns)
+            description = desc_elem.text if desc_elem is not None else ""
+            
+            # Extract coordinates
+            coords_elem = placemark.find('.//kml:coordinates', ns)
+            if coords_elem is not None and coords_elem.text:
+                # Ambil koordinat pertama (untuk point)
+                coord_text = coords_elem.text.strip()
+                first_coord = coord_text.split(',')[0:2]  # Ambil lng, lat
+                if len(first_coord) == 2:
+                    lng, lat = float(first_coord[0]), float(first_coord[1])
+                    
+                    names.append(name)
+                    descriptions.append(description)
+                    latitudes.append(lat)
+                    longitudes.append(lng)
+                    
+                    # Coba tentukan type dari name/description
+                    if 'monumen' in name.lower() or 'monas' in name.lower():
+                        types.append('Monument')
+                    elif 'taman' in name.lower() or 'park' in name.lower():
+                        types.append('Park')
+                    elif 'museum' in name.lower():
+                        types.append('Museum')
+                    elif 'sejarah' in name.lower() or 'historical' in name.lower():
+                        types.append('Historical')
+                    else:
+                        types.append('Other')
+        
+        # Buat DataFrame
+        if names:
+            df = pd.DataFrame({
+                'Name': names,
+                'Description': descriptions,
+                'Type': types,
+                'latitude': latitudes,
+                'longitude': longitudes
+            })
+            return df
+        else:
+            st.warning("Tidak ada data koordinat yang ditemukan dalam file KML")
+            return None
+            
     except Exception as e:
-        st.error(f"Error membaca file KML: {str(e)}")
+        st.error(f"Error parsing KML: {str(e)}")
         return None
 
-def create_sample_kml_data():
-    """Membuat data KML sampel jika tidak ada file upload"""
-    # Data sampel beberapa kota di Indonesia
-    sample_data = {
+def create_sample_data():
+    """Membuat data sampel"""
+    data = {
         'Name': [
             'Monumen Nasional', 'Bundaran HI', 'Taman Mini', 
             'Kota Tua Jakarta', 'Ancol Dreamland', 'GBK Senayan',
@@ -98,20 +132,12 @@ def create_sample_kml_data():
         ],
         'Type': ['Monument', 'Landmark', 'Park', 'Historical', 'Entertainment',
                 'Sports', 'Zoo', 'Entertainment', 'Park', 'Museum'],
-        'geometry': [
-            Point(106.8272, -6.1754),
-            Point(106.8229, -6.1963),
-            Point(106.8952, -6.3024),
-            Point(106.8133, -6.1352),
-            Point(106.8380, -6.1256),
-            Point(106.8025, -6.2194),
-            Point(106.8203, -6.3139),
-            Point(106.8400, -6.1250),
-            Point(106.8950, -6.3010),
-            Point(106.8223, -6.1761)
-        ]
+        'latitude': [-6.1754, -6.1963, -6.3024, -6.1352, -6.1256,
+                    -6.2194, -6.3139, -6.1250, -6.3010, -6.1761],
+        'longitude': [106.8272, 106.8229, 106.8952, 106.8133, 106.8380,
+                     106.8025, 106.8203, 106.8400, 106.8950, 106.8223]
     }
-    return gpd.GeoDataFrame(sample_data, crs='EPSG:4326')
+    return pd.DataFrame(data)
 
 def create_base_map(location=[-6.2088, 106.8456], zoom_start=10):
     """Membuat peta dasar"""
@@ -133,9 +159,9 @@ def get_color_from_type(feature_type):
         'Sports': 'blue',
         'Zoo': 'darkgreen',
         'Museum': 'cadetblue',
-        'default': 'gray'
+        'Other': 'gray'
     }
-    return color_map.get(feature_type, color_map['default'])
+    return color_map.get(feature_type, 'gray')
 
 def get_icon_from_type(feature_type):
     """Mengembalikan ikon berdasarkan jenis fitur"""
@@ -148,84 +174,85 @@ def get_icon_from_type(feature_type):
         'Sports': 'play-circle',
         'Zoo': 'heart',
         'Museum': 'education',
-        'default': 'info-sign'
+        'Other': 'info-sign'
     }
-    return icon_map.get(feature_type, icon_map['default'])
+    return icon_map.get(feature_type, 'info-sign')
 
 def main():
     # Header
     st.markdown('<h1 class="main-header">🌍 Web GIS dengan KML Interaktif</h1>', unsafe_allow_html=True)
     
-    # Sidebar - Upload dan Kontrol
+    # Sidebar
     with st.sidebar:
         st.markdown('<h2 class="sidebar-header">📁 Upload File KML</h2>', unsafe_allow_html=True)
         
         # Upload file KML
         uploaded_file = st.file_uploader("Pilih file KML", type=['kml'], key="kml_uploader")
         
-        if uploaded_file is not None:
-            gdf = parse_kml_file(uploaded_file)
-            if gdf is not None:
-                st.success(f"✅ File KML berhasil dimuat! {len(gdf)} fitur ditemukan.")
-        else:
-            st.info("📝 Gunakan file KML Anda atau gunakan data sampel")
-            if st.button("Gunakan Data Sampel"):
-                gdf = create_sample_kml_data()
-                st.success(f"✅ Data sampel dimuat! {len(gdf)} fitur ditemukan.")
-            else:
-                gdf = None
+        df = None
         
-        if gdf is not None:
+        if uploaded_file is not None:
+            # Baca konten file
+            kml_content = uploaded_file.read().decode('utf-8')
+            df = parse_kml_simple(kml_content)
+            if df is not None:
+                st.success(f"✅ File KML berhasil dimuat! {len(df)} fitur ditemukan.")
+        else:
+            # Coba baca file zxcmcnc.kml jika ada
+            try:
+                if os.path.exists('zxcmcnc.kml'):
+                    with open('zxcmcnc.kml', 'r', encoding='utf-8') as f:
+                        kml_content = f.read()
+                    df = parse_kml_simple(kml_content)
+                    if df is not None:
+                        st.success(f"✅ File zxcmcnc.kml berhasil dimuat! {len(df)} fitur ditemukan.")
+                else:
+                    st.info("📝 Upload file KML atau gunakan data sampel")
+            except Exception as e:
+                st.warning(f"Tidak bisa membaca zxcmcnc.kml: {str(e)}")
+        
+        # Tombol data sampel
+        if df is None:
+            if st.button("Gunakan Data Sampel"):
+                df = create_sample_data()
+                st.success(f"✅ Data sampel dimuat! {len(df)} fitur ditemukan.")
+        
+        if df is not None:
             st.markdown('<h2 class="sidebar-header">🎛️ Kontrol Tampilan</h2>', unsafe_allow_html=True)
             
             # Pilihan layer dasar
             basemap = st.selectbox(
                 "Pilih Layer Peta:",
-                ["OpenStreetMap", "Satellite", "Terrain", "Dark Mode", "Light Mode"]
+                ["OpenStreetMap", "Satellite", "Terrain", "Dark Mode"]
             )
             
-            # Kontrol tampilan fitur
+            # Kontrol tampilan
             st.markdown("**Tampilan Fitur:**")
             show_markers = st.checkbox("Tampilkan Marker", value=True)
             show_popups = st.checkbox("Tampilkan Popup Info", value=True)
             show_heatmap = st.checkbox("Tampilkan Heatmap", value=False)
             use_clusters = st.checkbox("Gunakan Marker Clusters", value=False)
             
-            # Filter berdasarkan jenis fitur
+            # Filter berdasarkan jenis
             st.markdown("**Filter berdasarkan Jenis:**")
-            if 'Type' in gdf.columns:
-                unique_types = gdf['Type'].unique().tolist()
-                selected_types = st.multiselect(
-                    "Pilih jenis yang ditampilkan:",
-                    unique_types,
-                    default=unique_types
-                )
-            else:
-                st.info("Kolom 'Type' tidak ditemukan dalam data")
-                selected_types = None
+            unique_types = df['Type'].unique().tolist()
+            selected_types = st.multiselect(
+                "Pilih jenis yang ditampilkan:",
+                unique_types,
+                default=unique_types
+            )
             
             # Filter berdasarkan nama
             st.markdown("**Filter berdasarkan Nama:**")
-            if 'Name' in gdf.columns:
-                search_term = st.text_input("Cari nama fitur:")
-            else:
-                search_term = ""
-            
-            # Style marker
-            st.markdown("**Style Marker:**")
-            marker_size = st.slider("Ukuran Marker:", 5, 20, 10)
-            marker_opacity = st.slider("Opacity Marker:", 0.1, 1.0, 0.8)
+            search_term = st.text_input("Cari nama fitur:")
     
     # Layout utama
-    if gdf is not None:
-        # Filter data berdasarkan pilihan
-        filtered_gdf = gdf.copy()
+    if df is not None:
+        # Filter data
+        filtered_df = df[df['Type'].isin(selected_types)] if selected_types else df
         
-        if selected_types and 'Type' in filtered_gdf.columns:
-            filtered_gdf = filtered_gdf[filtered_gdf['Type'].isin(selected_types)]
-        
-        if search_term and 'Name' in filtered_gdf.columns:
-            filtered_gdf = filtered_gdf[filtered_gdf['Name'].str.contains(search_term, case=False, na=False)]
+        if search_term:
+            filtered_df = filtered_df[filtered_df['Name'].str.contains(search_term, case=False, na=False)]
         
         col1, col2 = st.columns([2, 1])
         
@@ -238,104 +265,56 @@ def main():
                 "OpenStreetMap": "OpenStreetMap",
                 "Satellite": "Esri.WorldImagery",
                 "Terrain": "Stamen.Terrain",
-                "Dark Mode": "CartoDB.DarkMatter",
-                "Light Mode": "CartoDB.Positron"
+                "Dark Mode": "CartoDB.DarkMatter"
             }
             
-            # Tambahkan tile layer yang dipilih
             folium.TileLayer(tile_layers[basemap]).add_to(m)
             
             # Tambahkan marker clusters jika dipilih
             if use_clusters and show_markers:
+                from folium.plugins import MarkerCluster
                 marker_cluster = MarkerCluster().add_to(m)
             
-            # Tambahkan fitur ke peta
-            for idx, row in filtered_gdf.iterrows():
-                geometry = row.geometry
-                
-                # Handle different geometry types
-                if geometry.geom_type == 'Point':
-                    # Untuk titik, tambahkan marker
-                    if show_markers:
-                        # Dapatkan properti untuk popup
-                        popup_content = ""
-                        if show_popups:
-                            popup_content = "<div style='min-width:200px'>"
-                            for col in filtered_gdf.columns:
-                                if col != 'geometry' and pd.notna(row[col]):
-                                    popup_content += f"<b>{col}:</b> {row[col]}<br>"
-                            popup_content += "</div>"
-                        
-                        # Tentukan warna dan ikon
-                        feature_type = row.get('Type', 'default')
-                        color = get_color_from_type(feature_type)
-                        icon = get_icon_from_type(feature_type)
-                        
-                        # Buat marker
-                        marker = folium.Marker(
-                            location=[geometry.y, geometry.x],
-                            popup=folium.Popup(popup_content, max_width=300) if show_popups else None,
-                            tooltip=row.get('Name', 'Fitur'),
-                            icon=folium.Icon(
-                                color=color, 
-                                icon=icon,
-                                prefix='glyphicon'
-                            )
-                        )
-                        
-                        # Tambahkan ke cluster atau langsung ke peta
-                        if use_clusters:
-                            marker.add_to(marker_cluster)
-                        else:
-                            marker.add_to(m)
-                
-                elif geometry.geom_type in ['Polygon', 'MultiPolygon']:
-                    # Untuk poligon, tambahkan shape
-                    if geometry.geom_type == 'Polygon':
-                        coords = [[[y, x] for x, y in geometry.exterior.coords]]
-                    else:
-                        coords = []
-                        for poly in geometry.geoms:
-                            coords.append([[y, x] for x, y in poly.exterior.coords])
+            # Tambahkan marker ke peta
+            if show_markers:
+                for idx, row in filtered_df.iterrows():
+                    # Konten popup
+                    popup_content = ""
+                    if show_popups:
+                        popup_content = f"""
+                        <div style='min-width:200px'>
+                            <b>{row['Name']}</b><br>
+                            <b>Type:</b> {row['Type']}<br>
+                            <b>Description:</b> {row['Description']}<br>
+                            <b>Koordinat:</b> {row['latitude']:.4f}, {row['longitude']:.4f}
+                        </div>
+                        """
                     
-                    # Buat poligon
-                    folium.Polygon(
-                        locations=coords,
-                        popup=row.get('Name', 'Poligon'),
-                        color='blue',
-                        fill=True,
-                        fillColor='blue',
-                        fillOpacity=0.2,
-                        weight=2
-                    ).add_to(m)
-                
-                elif geometry.geom_type in ['LineString', 'MultiLineString']:
-                    # Untuk garis
-                    if geometry.geom_type == 'LineString':
-                        coords = [[y, x] for x, y in geometry.coords]
-                    else:
-                        coords = []
-                        for line in geometry.geoms:
-                            coords.extend([[y, x] for x, y in line.coords])
+                    # Style marker
+                    color = get_color_from_type(row['Type'])
+                    icon = get_icon_from_type(row['Type'])
                     
-                    folium.PolyLine(
-                        locations=coords,
-                        popup=row.get('Name', 'Garis'),
-                        color='red',
-                        weight=3
-                    ).add_to(m)
+                    marker = folium.Marker(
+                        location=[row['latitude'], row['longitude']],
+                        popup=folium.Popup(popup_content, max_width=300) if show_popups else None,
+                        tooltip=row['Name'],
+                        icon=folium.Icon(color=color, icon=icon, prefix='glyphicon')
+                    )
+                    
+                    # Tambahkan ke cluster atau langsung ke peta
+                    if use_clusters:
+                        marker.add_to(marker_cluster)
+                    else:
+                        marker.add_to(m)
             
-            # Tambahkan heatmap jika dipilih
+            # Tambahkan heatmap
             if show_heatmap:
-                heat_data = []
-                for idx, row in filtered_gdf.iterrows():
-                    if row.geometry.geom_type == 'Point':
-                        heat_data.append([row.geometry.y, row.geometry.x, 1])
-                
-                if heat_data:
-                    HeatMap(heat_data, radius=15, blur=10, gradient={0.4: 'blue', 0.65: 'lime', 1: 'red'}).add_to(m)
+                from folium.plugins import HeatMap
+                heat_data = [[row['latitude'], row['longitude'], 1] for idx, row in filtered_df.iterrows()]
+                HeatMap(heat_data, radius=15, blur=10).add_to(m)
             
-            # Tambahkan kontrol peta
+            # Tambahkan kontrol
+            from folium.plugins import MeasureControl, Fullscreen
             MeasureControl().add_to(m)
             Fullscreen().add_to(m)
             
@@ -343,7 +322,7 @@ def main():
             st.markdown("### 🗺️ Peta Interaktif")
             map_data = st_folium(m, width=700, height=600, key="main_map")
             
-            # Tampilkan informasi klik
+            # Info klik
             if map_data.get('last_clicked'):
                 st.info(f"📍 Koordinat terklik: {map_data['last_clicked']}")
         
@@ -353,104 +332,60 @@ def main():
             # Metrics
             col_metric1, col_metric2 = st.columns(2)
             with col_metric1:
-                st.metric("Total Fitur", len(filtered_gdf))
-                st.metric("Fitur Ditampilkan", len(filtered_gdf))
+                st.metric("Total Fitur", len(df))
+                st.metric("Ditampilkan", len(filtered_df))
             
             with col_metric2:
-                if 'Type' in filtered_gdf.columns:
-                    type_counts = filtered_gdf['Type'].value_counts()
-                    most_common = type_counts.index[0] if len(type_counts) > 0 else "-"
-                    st.metric("Jenis Terbanyak", most_common)
+                type_counts = filtered_df['Type'].value_counts()
+                most_common = type_counts.index[0] if len(type_counts) > 0 else "-"
+                st.metric("Jenis Terbanyak", most_common)
                 
-                geometry_types = filtered_gdf.geometry.geom_type.value_counts()
-                main_geom = geometry_types.index[0] if len(geometry_types) > 0 else "-"
-                st.metric("Tipe Geometri", main_geom)
+                total_locations = len(filtered_df)
+                st.metric("Lokasi Unik", total_locations)
             
-            # Informasi kolom
-            st.markdown("#### 📋 Kolom Data")
-            columns_info = []
-            for col in filtered_gdf.columns:
-                if col != 'geometry':
-                    non_null = filtered_gdf[col].notna().sum()
-                    dtype = str(filtered_gdf[col].dtype)
-                    columns_info.append({
-                        'Kolom': col,
-                        'Tipe': dtype,
-                        'Non-Null': non_null,
-                        'Contoh': str(filtered_gdf[col].iloc[0]) if non_null > 0 else '-'
-                    })
-            
-            if columns_info:
-                st.dataframe(pd.DataFrame(columns_info), use_container_width=True)
+            # Chart distribusi
+            st.markdown("#### 📈 Distribusi Jenis")
+            type_counts = filtered_df['Type'].value_counts()
+            if not type_counts.empty:
+                st.bar_chart(type_counts)
             
             # Daftar fitur
             st.markdown("#### 🎯 Daftar Fitur")
-            if len(filtered_gdf) > 0:
-                for idx, row in filtered_gdf.head(10).iterrows():  # Batasi 10 item pertama
-                    with st.container():
-                        feature_name = row.get('Name', f'Fitur {idx+1}')
-                        feature_type = row.get('Type', 'Tidak diketahui')
-                        
-                        st.markdown(f"""
-                        <div class="feature-item">
-                            <b>{feature_name}</b><br>
-                            <small>Type: {feature_type} | Geometry: {row.geometry.geom_type}</small>
-                        </div>
-                        """, unsafe_allow_html=True)
-                
-                if len(filtered_gdf) > 10:
-                    st.info(f"Menampilkan 10 dari {len(filtered_gdf)} fitur. Gunakan filter untuk melihat lebih banyak.")
-            else:
-                st.warning("Tidak ada fitur yang sesuai dengan filter yang dipilih.")
+            for idx, row in filtered_df.head(8).iterrows():
+                st.markdown(f"""
+                <div class="feature-item">
+                    <b>{row['Name']}</b><br>
+                    <small>Type: {row['Type']} | {row['latitude']:.4f}, {row['longitude']:.4f}</small>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            if len(filtered_df) > 8:
+                st.info(f"Menampilkan 8 dari {len(filtered_df)} fitur")
             
             # Ekspor data
             st.markdown("#### 💾 Ekspor Data")
-            col_exp1, col_exp2 = st.columns(2)
-            
-            with col_exp1:
-                if st.button("Ekspor ke CSV"):
-                    csv_data = filtered_gdf.drop('geometry', axis=1)
-                    csv = csv_data.to_csv(index=False)
-                    st.download_button(
-                        label="Download CSV",
-                        data=csv,
-                        file_name="filtered_gis_data.csv",
-                        mime="text/csv"
-                    )
-            
-            with col_exp2:
-                if st.button("Ekspor ke GeoJSON"):
-                    geojson = filtered_gdf.to_json()
-                    st.download_button(
-                        label="Download GeoJSON",
-                        data=geojson,
-                        file_name="filtered_gis_data.geojson",
-                        mime="application/json"
-                    )
+            if st.button("Ekspor ke CSV"):
+                csv = filtered_df.to_csv(index=False)
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name="gis_data.csv",
+                    mime="text/csv"
+                )
     
     else:
-        # Tampilan awal jika belum ada data
+        # Tampilan awal
         st.info("""
         ## 📝 Instruksi Penggunaan
         
-        1. **Upload file KML** Anda melalui sidebar di sebelah kiri
-        2. Atau gunakan **data sampel** dengan mengklik tombol 'Gunakan Data Sampel'
-        3. Setelah data dimuat, Anda dapat:
-           - Memfilter fitur yang ditampilkan
-           - Mengubah style peta
-           - Mengontrol tampilan marker dan info
-           - Melihat statistik data
+        1. **Upload file KML** Anda melalui sidebar
+        2. Atau letakkan file `zxcmcnc.kml` di folder yang sama
+        3. Atau gunakan **data sampel**
         
-        ### 🎯 Fitur yang Tersedia:
-        - ✅ Upload dan parsing file KML
-        - ✅ Filter data interaktif
-        - ✅ Multiple base layers
-        - ✅ Marker clusters dan heatmap
-        - ✅ Informasi detail setiap fitur
-        - ✅ Ekspor data hasil filter
+        Aplikasi akan otomatis membaca dan menampilkan data KML Anda!
         """)
         
-        # Tampilkan peta kosong
+        # Peta kosong
         m = create_base_map()
         st_folium(m, width=800, height=500)
 
