@@ -428,12 +428,58 @@ def analyze_from_map_click(click_data, radius_km):
                     gangguan_point, 
                     radius_km
                 )
+            # Apply filters from sidebar
+            try:
+                st.session_state.gdf_nearby = apply_filters(
+                    st.session_state.gdf_nearby,
+                    st.session_state.get('name_filter', ''),
+                    st.session_state.get('name_list', []),
+                    locals().get('source_col', None),
+                    st.session_state.get('source_filter', [])
+                )
+            except Exception:
+                pass
             
             return True
         return False
     except Exception as e:
         st.error(f"Analysis error: {e}")
         return False
+
+
+def apply_filters(gdf, name_filter_text, name_exact_list, source_col_name, source_filter_list):
+    """Apply name substring, exact name list and source layer filters to a GeoDataFrame."""
+    if gdf is None or gdf.empty:
+        return gdf
+
+    out = gdf.copy()
+
+    # name substring filter
+    if name_filter_text and name_filter_text.strip():
+        s = name_filter_text.strip().lower()
+        # apply to any name-like column
+        name_cols = [c for c in out.columns if 'name' in c.lower()]
+        if name_cols:
+            mask = False
+            for nc in name_cols:
+                mask = mask | out[nc].astype(str).str.lower().str.contains(s, na=False)
+            out = out[mask]
+
+    # exact name list (multi-select)
+    if name_exact_list:
+        name_cols = [c for c in out.columns if 'name' in c.lower()]
+        if name_cols:
+            nc = name_cols[0]
+            out = out[out[nc].isin(name_exact_list)]
+
+    # source layer filter (multi-select)
+    if source_filter_list and source_col_name:
+        try:
+            out = out[out[source_col_name].astype(str).isin(source_filter_list)]
+        except Exception:
+            pass
+
+    return out
 
 # UI Streamlit
 st.title("🚨 GIS KML Quick Response - ULTIMATE")
@@ -561,6 +607,17 @@ if st.session_state.gdf_master is not None and not st.session_state.gdf_master.e
                 gangguan_point, 
                 radius_km
             )
+        # apply sidebar filters
+        try:
+            st.session_state.gdf_nearby = apply_filters(
+                st.session_state.gdf_nearby,
+                st.session_state.get('name_filter', ''),
+                st.session_state.get('name_list', []),
+                source_col,
+                st.session_state.get('source_filter', [])
+            )
+        except Exception:
+            pass
         st.rerun()
     
     # Show click info
