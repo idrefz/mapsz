@@ -19,7 +19,7 @@ supported_drivers['libkml'] = 'rw'
 
 # Konfigurasi halaman
 st.set_page_config(
-    page_title="GIS KML Folder Selector",
+    page_title="GIS KML Folder Viewer",
     page_icon="📁",
     layout="wide"
 )
@@ -30,8 +30,12 @@ KML_MASTER_PATH = "zxcmcnc.kml"
 # Initialize session state
 if 'gdf_master' not in st.session_state:
     st.session_state.gdf_master = None
-if 'gdf_filtered' not in st.session_state:
-    st.session_state.gdf_filtered = None
+if 'available_folders' not in st.session_state:
+    st.session_state.available_folders = []
+if 'selected_folder' not in st.session_state:
+    st.session_state.selected_folder = None
+if 'folder_features' not in st.session_state:
+    st.session_state.folder_features = {}
 if 'analysis_done' not in st.session_state:
     st.session_state.analysis_done = False
 if 'gdf_nearby' not in st.session_state:
@@ -42,20 +46,15 @@ if 'map_click_data' not in st.session_state:
     st.session_state.map_click_data = None
 if 'last_click_coords' not in st.session_state:
     st.session_state.last_click_coords = None
-if 'available_folders' not in st.session_state:
-    st.session_state.available_folders = []
-if 'selected_folders' not in st.session_state:
-    st.session_state.selected_folders = []
-if 'folder_features' not in st.session_state:
-    st.session_state.folder_features = {}
 
-# Fungsi untuk extract folders dari KML
-def extract_folders_from_kml(file_path):
-    """Extract semua folder dari file KML"""
+# Fungsi untuk extract folders dan features dari KML
+def extract_folders_and_features(file_path):
+    """Extract semua folder dan features dari file KML"""
     folders = {}
+    all_features = []
     
     try:
-        # Method 1: Parsing manual XML
+        # Method 1: Parsing manual XML untuk struktur folder
         tree = ET.parse(file_path)
         root = tree.getroot()
         
@@ -71,93 +70,153 @@ def extract_folders_from_kml(file_path):
                 
                 # Extract features dalam folder ini
                 for placemark in folder.findall('.//kml:Placemark', ns):
-                    name_elem = placemark.find('kml:name', ns)
-                    feature_name = name_elem.text if name_elem is not None else "Unnamed"
-                    folders[folder_name].append(feature_name)
+                    feature_data = extract_feature_from_placemark(placemark, ns)
+                    if feature_data:
+                        feature_data['folder'] = folder_name
+                        folders[folder_name].append(feature_data)
+                        all_features.append(feature_data)
         
-        # Jika tidak ada folder, coba grouping by other attributes
+        # Jika tidak ada folder, anggap semua features dalam satu folder
         if not folders:
-            # Coba grouping by description atau other fields
-            gdf = gpd.read_file(file_path, driver='KML')
-            if not gdf.empty:
-                # Cari kolom yang mungkin mengandung folder information
-                folder_columns = []
-                for col in gdf.columns:
-                    if any(keyword in col.lower() for keyword in ['folder', 'group', 'category', 'type', 'layer']):
-                        folder_columns.append(col)
-                
-                if folder_columns:
-                    for col in folder_columns:
-                        unique_values = gdf[col].dropna().unique()
-                        for value in unique_values:
-                            if value and value != '':
-                                folders[f"{col}: {value}"] = list(gdf[gdf[col] == value]['name'].dropna().values if 'name' in gdf.columns else [f"Feature {i}" for i in range(len(gdf[gdf[col] == value]))])
-                
-                # Jika masih tidak ada, buat folder berdasarkan geometry type
-                if not folders:
-                    geom_types = gdf.geometry.type.unique()
-                    for geom_type in geom_types:
-                        features = list(gdf[gdf.geometry.type == geom_type]['name'].dropna().values if 'name' in gdf.columns else [f"{geom_type} {i}" for i in range(len(gdf[gdf.geometry.type == geom_type]))])
-                        folders[f"Geometry: {geom_type}"] = features
+            folder_name = "All Features"
+            folders[folder_name] = []
+            
+            # Extract semua Placemark langsung
+            for placemark in root.findall('.//kml:Placemark', ns):
+                feature_data = extract_feature_from_placemark(placemark, ns)
+                if feature_data:
+                    feature_data['folder'] = folder_name
+                    folders[folder_name].append(feature_data)
+                    all_features.append(feature_data)
         
-        return folders
+        return folders, all_features
         
     except Exception as e:
         st.warning(f"Folder extraction warning: {e}")
-        return {}
+        # Fallback: load dengan geopandas dan buat folder berdasarkan geometry type
+        try:
+            gdf = gpd.read_file(file_path, driver='KML')
+            if not gdf.empty:
+                folder_name = "All Features"
+                folders[folder_name] = []
+                
+                for idx, row in gdf.iterrows():
+                    feature_data = {
+                        'name': row.get('name', f'Feature {idx}'),
+                        'description': row.get('description', ''),
+                        'geometry': row.geometry,
+                        'folder': folder_name
+                    }
+                    folders[folder_name].append(feature_data)
+                    all_features.append(feature_data)
+                
+                return folders, all_features
+        except Exception as e2:
+            st.error(f"Fallback method also failed: {e2}")
+        
+        return {}, []
 
-# Fungsi untuk memfilter features berdasarkan folder yang dipilih
-def filter_features_by_folders(gdf, selected_folders, folder_features):
-    """Filter features berdasarkan folder yang dipilih"""
-    if not selected_folders:
-        return gdf
-    
+def extract_feature_from_placemark(placemark, ns):
+    """Extract feature data dari placemark"""
     try:
-        # Untuk simplicity, kita akan filter berdasarkan nama features
-        # Dalam implementasi real, Anda mungkin perlu mapping yang lebih complex
-        selected_features = []
+        name_elem = placemark.find('kml:name', ns)
+        name = name_elem.text if name_elem is not None else "Unnamed"
         
-        for folder in selected_folders:
-            if folder in folder_features:
-                selected_features.extend(folder_features[folder])
+        description_elem = placemark.find('kml:description', ns)
+        description = description_elem.text if description_elem is not None else ""
         
-        # Filter dataframe berdasarkan nama features
-        if 'name' in gdf.columns:
-            filtered_gdf = gdf[gdf['name'].isin(selected_features)]
-        else:
-            # Jika tidak ada kolom name, kita tidak bisa filter dengan tepat
-            st.warning("Tidak ada kolom 'name' untuk filtering folder")
-            return gdf
+        geometry = None
         
-        return filtered_gdf
+        # Cek LineString
+        linestring = placemark.find('.//kml:LineString', ns)
+        if linestring is not None:
+            coordinates = linestring.find('kml:coordinates', ns)
+            if coordinates is not None and coordinates.text:
+                coords_list = []
+                for coord in coordinates.text.strip().split():
+                    if coord:
+                        try:
+                            parts = coord.split(',')
+                            lon, lat = float(parts[0]), float(parts[1])
+                            coords_list.append((lon, lat))
+                        except:
+                            continue
+                
+                if len(coords_list) > 1:
+                    geometry = LineString(coords_list)
+        
+        # Cek Point
+        point = placemark.find('.//kml:Point', ns)
+        if point is not None:
+            coordinates = point.find('kml:coordinates', ns)
+            if coordinates is not None and coordinates.text:
+                try:
+                    parts = coordinates.text.strip().split(',')
+                    lon, lat = float(parts[0]), float(parts[1])
+                    geometry = Point(lon, lat)
+                except:
+                    pass
+        
+        # Cek Polygon
+        polygon = placemark.find('.//kml:Polygon', ns)
+        if polygon is not None:
+            outer = polygon.find('.//kml:outerBoundaryIs', ns)
+            if outer is not None:
+                coordinates = outer.find('.//kml:coordinates', ns)
+                if coordinates is not None and coordinates.text:
+                    coords_list = []
+                    for coord in coordinates.text.strip().split():
+                        if coord:
+                            try:
+                                parts = coord.split(',')
+                                lon, lat = float(parts[0]), float(parts[1])
+                                coords_list.append((lon, lat))
+                            except:
+                                continue
+                    
+                    if len(coords_list) > 2:
+                        geometry = Polygon(coords_list)
+        
+        if geometry is not None:
+            return {
+                'name': name,
+                'description': description,
+                'geometry': geometry
+            }
+        
+        return None
         
     except Exception as e:
-        st.error(f"Error filtering by folders: {e}")
-        return gdf
+        return None
 
-# Fungsi untuk membaca KML dengan folder support
-def load_kml_with_folders(file_path):
-    """Membaca KML dengan support folder structure"""
+# Fungsi untuk load KML dengan folder support
+def load_kml_with_folder_view(file_path):
+    """Load KML dengan support view per folder"""
     try:
-        # Load data dengan geopandas
-        gdf = gpd.read_file(file_path, driver='KML')
+        folders, all_features = extract_folders_and_features(file_path)
         
-        if gdf.empty:
-            st.error("❌ KML file kosong atau tidak terbaca")
-            return None, {}
-        
-        # Extract folder structure
-        folders = extract_folders_from_kml(file_path)
-        
-        # Jika tidak ada folders terdeteksi, buat default folder
         if not folders:
-            folders = {"All Features": list(gdf['name'].dropna().values) if 'name' in gdf.columns else [f"Feature {i}" for i in range(len(gdf))]}
+            st.error("❌ Tidak ada folder atau features yang ditemukan dalam KML")
+            return None, {}, []
         
-        return gdf, folders
-        
+        # Convert semua features ke GeoDataFrame
+        if all_features:
+            gdf = gpd.GeoDataFrame(all_features, crs="EPSG:4326")
+            st.success(f"✅ Loaded {len(gdf)} features dalam {len(folders)} folder")
+            return gdf, folders, all_features
+        else:
+            st.error("❌ Tidak ada features yang berhasil diekstrak")
+            return None, {}, []
+            
     except Exception as e:
-        st.error(f"❌ Error loading KML with folders: {e}")
-        return None, {}
+        st.error(f"❌ Error loading KML: {e}")
+        return None, {}, []
+
+def get_features_by_folder(folder_name, folders_data):
+    """Dapatkan features untuk folder tertentu"""
+    if folder_name in folders_data:
+        return folders_data[folder_name]
+    return []
 
 def clean_geometry(gdf):
     """Membersihkan geometry"""
@@ -169,63 +228,72 @@ def clean_geometry(gdf):
         st.warning(f"Geometry cleaning warning: {e}")
         return gdf
 
-def filter_features_nearby(gdf, center_point, radius_km=5):
-    """Filter features dalam radius tertentu"""
+def filter_features_nearby(features_list, center_point, radius_km=5):
+    """Filter features dalam radius tertentu dari list features"""
     try:
-        if gdf is None or gdf.empty:
-            return gpd.GeoDataFrame()
+        if not features_list:
+            return []
         
         buffer_degrees = radius_km / 111
         buffer_zone = center_point.buffer(buffer_degrees)
         
-        # Gunakan spatial index untuk percepat query
-        spatial_index = gdf.sindex
-        possible_matches_index = list(spatial_index.intersection(buffer_zone.bounds))
-        possible_matches = gdf.iloc[possible_matches_index]
+        nearby_features = []
         
-        # Filter yang benar-benar intersect
-        nearby_features = possible_matches[possible_matches.intersects(buffer_zone)].copy()
-        
-        if nearby_features.empty:
-            return nearby_features
-        
-        # Hitung jarak
-        def calculate_distance(geom):
+        for feature in features_list:
             try:
-                return center_point.distance(geom) * 111000
+                if feature['geometry'].intersects(buffer_zone):
+                    # Hitung jarak
+                    distance = center_point.distance(feature['geometry']) * 111000
+                    feature_copy = feature.copy()
+                    feature_copy['jarak_meter'] = distance
+                    nearby_features.append(feature_copy)
             except:
-                return float('inf')
+                continue
         
-        nearby_features['jarak_meter'] = nearby_features.geometry.apply(calculate_distance)
-        nearby_features = nearby_features.sort_values('jarak_meter')
+        # Sort by distance
+        nearby_features.sort(key=lambda x: x['jarak_meter'])
         
         return nearby_features
         
     except Exception as e:
         st.error(f"Error filtering: {e}")
-        return gpd.GeoDataFrame()
+        return []
 
-def create_detailed_popup(row):
-    """Membuat popup detail"""
+def create_detailed_popup(feature):
+    """Membuat popup detail untuk feature"""
     try:
         popup_html = "<div style='max-width: 350px; max-height: 400px; overflow-y: auto;'>"
         popup_html += "<h4 style='margin-bottom: 10px; color: #1f77b4;'>📋 Detail Feature</h4>"
         
-        for col in row.index:
-            if col != 'geometry' and pd.notna(row[col]) and row[col] not in ['', None]:
-                value = str(row[col])
-                if len(value) > 150:
-                    value = value[:150] + "..."
-                
-                popup_html += f"""
-                <div style='margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 5px;'>
-                    <strong style='color: #333;'>{col}:</strong><br>
-                    <span style='color: #666; word-wrap: break-word;'>{value}</span>
-                </div>
-                """
+        # Basic info
+        popup_html += f"""
+        <div style='margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 5px;'>
+            <strong style='color: #333;'>Nama:</strong><br>
+            <span style='color: #666; word-wrap: break-word;'>{feature.get('name', 'Unnamed')}</span>
+        </div>
+        """
         
-        geometry_type = row.geometry.geom_type if hasattr(row, 'geometry') else 'Unknown'
-        jarak = row.get('jarak_meter', 'N/A')
+        if feature.get('description'):
+            desc = feature['description']
+            if len(desc) > 150:
+                desc = desc[:150] + "..."
+            popup_html += f"""
+            <div style='margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 5px;'>
+                <strong style='color: #333;'>Deskripsi:</strong><br>
+                <span style='color: #666; word-wrap: break-word;'>{desc}</span>
+            </div>
+            """
+        
+        if feature.get('folder'):
+            popup_html += f"""
+            <div style='margin-bottom: 8px; border-bottom: 1px solid #eee; padding-bottom: 5px;'>
+                <strong style='color: #333;'>Folder:</strong><br>
+                <span style='color: #666; word-wrap: break-word;'>{feature['folder']}</span>
+            </div>
+            """
+        
+        geometry_type = feature['geometry'].geom_type if 'geometry' in feature else 'Unknown'
+        jarak = feature.get('jarak_meter', 'N/A')
         
         popup_html += f"""
         <div style='margin-top: 10px; padding-top: 10px; border-top: 2px solid #007cba; background: #f0f8ff; padding: 10px; border-radius: 5px;'>
@@ -238,8 +306,8 @@ def create_detailed_popup(row):
     except Exception as e:
         return f"<div>Popup error: {str(e)}</div>"
 
-def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15):
-    """Membuat peta interaktif"""
+def create_interactive_map(selected_features, gangguan_coords, zoom=15):
+    """Membuat peta interaktif dengan features yang dipilih"""
     try:
         if gangguan_coords:
             center_loc = gangguan_coords
@@ -275,29 +343,31 @@ def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15):
                 popup=f"Area Pencarian ({radius_km}km)"
             ).add_to(m)
         
-        # Tambahkan features
-        if gdf_nearby is not None and not gdf_nearby.empty:
-            for idx, row in gdf_nearby.iterrows():
+        # Tambahkan features dari folder yang dipilih
+        if selected_features:
+            for feature in selected_features:
                 try:
-                    if row.geometry.geom_type == 'Point':
+                    geometry = feature['geometry']
+                    
+                    if geometry.geom_type == 'Point':
                         folium.Marker(
-                            location=[row.geometry.y, row.geometry.x],
-                            popup=folium.Popup(create_detailed_popup(row), max_width=400),
+                            location=[geometry.y, geometry.x],
+                            popup=folium.Popup(create_detailed_popup(feature), max_width=400),
                             icon=folium.Icon(color='blue', icon='info-sign')
                         ).add_to(m)
                     
-                    elif row.geometry.geom_type in ['LineString', 'MultiLineString']:
+                    elif geometry.geom_type in ['LineString', 'MultiLineString']:
                         folium.GeoJson(
-                            row.geometry.__geo_interface__,
+                            geometry.__geo_interface__,
                             style_function=lambda x: {'color': 'green', 'weight': 4, 'opacity': 0.8},
-                            popup=folium.Popup(create_detailed_popup(row), max_width=400)
+                            popup=folium.Popup(create_detailed_popup(feature), max_width=400)
                         ).add_to(m)
                     
-                    elif row.geometry.geom_type in ['Polygon', 'MultiPolygon']:
+                    elif geometry.geom_type in ['Polygon', 'MultiPolygon']:
                         folium.GeoJson(
-                            row.geometry.__geo_interface__,
+                            geometry.__geo_interface__,
                             style_function=lambda x: {'fillColor': 'orange', 'color': 'orange', 'weight': 2, 'fillOpacity': 0.3},
-                            popup=folium.Popup(create_detailed_popup(row), max_width=400)
+                            popup=folium.Popup(create_detailed_popup(feature), max_width=400)
                         ).add_to(m)
                         
                 except Exception as e:
@@ -309,7 +379,7 @@ def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15):
         st.error(f"Map creation error: {e}")
         return folium.Map(location=[-6.2, 106.8], zoom_start=10)
 
-def analyze_from_map_click(click_data, radius_km):
+def analyze_from_map_click(click_data, radius_km, current_features):
     """Analisis dari klik peta"""
     try:
         if click_data and 'lat' in click_data and 'lng' in click_data:
@@ -322,10 +392,8 @@ def analyze_from_map_click(click_data, radius_km):
             gangguan_point = Point(lng, lat)
             
             with st.spinner(f"Mencari features dalam radius {radius_km} km..."):
-                # Gunakan filtered data jika ada
-                data_to_use = st.session_state.gdf_filtered if st.session_state.gdf_filtered is not None else st.session_state.gdf_master
                 st.session_state.gdf_nearby = filter_features_nearby(
-                    data_to_use, 
+                    current_features, 
                     gangguan_point, 
                     radius_km
                 )
@@ -337,8 +405,8 @@ def analyze_from_map_click(click_data, radius_km):
         return False
 
 # UI Streamlit
-st.title("📁 GIS KML Folder Selector")
-st.markdown("**Pilih folder tertentu dari KML → Analisis per area gangguan**")
+st.title("📁 GIS KML Folder Viewer")
+st.markdown("**Pilih folder untuk dilihat di peta → Analisis per area gangguan**")
 
 # Sidebar
 with st.sidebar:
@@ -346,51 +414,43 @@ with st.sidebar:
     st.markdown("---")
     
     # Load KML data
-    if st.button("🔄 Load KML Data", use_container_width=True):
-        with st.spinner("Loading KML data..."):
-            st.session_state.gdf_master, st.session_state.folder_features = load_kml_with_folders(KML_MASTER_PATH)
+    if st.button("🔄 Load KML Data", type="primary", use_container_width=True):
+        with st.spinner("Loading KML data dan extracting folders..."):
+            st.session_state.gdf_master, st.session_state.folder_features, st.session_state.all_features = load_kml_with_folder_view(KML_MASTER_PATH)
             if st.session_state.gdf_master is not None:
                 st.session_state.available_folders = list(st.session_state.folder_features.keys())
-                st.session_state.gdf_filtered = st.session_state.gdf_master
-                st.success(f"✅ Loaded {len(st.session_state.gdf_master)} features")
+                if st.session_state.available_folders:
+                    st.session_state.selected_folder = st.session_state.available_folders[0]
+                st.success(f"✅ Loaded {len(st.session_state.all_features)} features dalam {len(st.session_state.available_folders)} folder")
     
     st.markdown("---")
     
     # Folder selection
     if st.session_state.available_folders:
-        st.subheader("📂 Pilih Folder")
+        st.subheader("📂 Pilih Folder untuk Dilihat")
         
-        # Select all checkbox
-        if st.checkbox("Pilih Semua Folder", value=True):
-            st.session_state.selected_folders = st.session_state.available_folders.copy()
-        else:
-            st.session_state.selected_folders = []
+        selected = st.selectbox(
+            "Pilih folder:",
+            options=st.session_state.available_folders,
+            index=st.session_state.available_folders.index(st.session_state.selected_folder) if st.session_state.selected_folder in st.session_state.available_folders else 0,
+            key="folder_selector"
+        )
         
-        # Individual folder selection
-        for folder in st.session_state.available_folders:
-            feature_count = len(st.session_state.folder_features[folder])
-            if st.checkbox(f"{folder} ({feature_count} features)", 
-                          value=folder in st.session_state.selected_folders,
-                          key=f"folder_{folder}"):
-                if folder not in st.session_state.selected_folders:
-                    st.session_state.selected_folders.append(folder)
-            else:
-                if folder in st.session_state.selected_folders:
-                    st.session_state.selected_folders.remove(folder)
+        if selected != st.session_state.selected_folder:
+            st.session_state.selected_folder = selected
+            st.rerun()
         
-        # Apply folder filter
-        if st.button("✅ Terapkan Filter Folder", type="primary", use_container_width=True):
-            if st.session_state.selected_folders:
-                with st.spinner("Memfilter features..."):
-                    st.session_state.gdf_filtered = filter_features_by_folders(
-                        st.session_state.gdf_master,
-                        st.session_state.selected_folders,
-                        st.session_state.folder_features
-                    )
-                st.success(f"✅ Filtered: {len(st.session_state.gdf_filtered)} features")
-            else:
-                st.session_state.gdf_filtered = st.session_state.gdf_master
-                st.info("ℹ️ Menampilkan semua features")
+        # Show folder info
+        if st.session_state.selected_folder:
+            features_in_folder = st.session_state.folder_features[st.session_state.selected_folder]
+            st.info(f"**{st.session_state.selected_folder}** - {len(features_in_folder)} features")
+            
+            # Show feature list in folder
+            with st.expander("📋 Lihat Features dalam Folder"):
+                for i, feature in enumerate(features_in_folder[:20]):  # Limit to first 20
+                    st.write(f"{i+1}. {feature.get('name', 'Unnamed')}")
+                if len(features_in_folder) > 20:
+                    st.write(f"... dan {len(features_in_folder) - 20} features lainnya")
     
     st.markdown("---")
     st.header("📍 Input Lokasi Gangguan")
@@ -411,41 +471,37 @@ with st.sidebar:
     with col1:
         analyze_btn = st.button("🚀 Analisis Gangguan", type="primary", use_container_width=True)
     with col2:
-        if st.button("🔄 Reset All", use_container_width=True):
-            for key in ['analysis_done', 'gdf_nearby', 'gangguan_coords', 'map_click_data', 'last_click_coords', 'selected_folders', 'gdf_filtered']:
+        if st.button("🔄 Reset View", use_container_width=True):
+            for key in ['analysis_done', 'gdf_nearby', 'gangguan_coords', 'map_click_data', 'last_click_coords']:
                 if key in st.session_state:
                     st.session_state[key] = None
-            st.session_state.selected_folders = st.session_state.available_folders.copy() if st.session_state.available_folders else []
             st.rerun()
     
     st.markdown("---")
     zoom_level = st.slider("Zoom Level Peta", 10, 18, 15, key="zoom_input")
 
 # Main content
-if st.session_state.gdf_master is not None:
-    # Show current filter status
+if st.session_state.gdf_master is not None and st.session_state.selected_folder:
+    # Get current folder features
+    current_features = get_features_by_folder(st.session_state.selected_folder, st.session_state.folder_features)
+    
+    # Show current selection info
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        total_features = len(st.session_state.gdf_master)
-        st.metric("Total Features", total_features)
+        st.metric("Total Folder", len(st.session_state.available_folders))
     
     with col2:
-        if st.session_state.gdf_filtered is not None:
-            filtered_count = len(st.session_state.gdf_filtered)
-            st.metric("Features Terfilter", filtered_count)
-        else:
-            st.metric("Features Terfilter", total_features)
+        st.metric("Folder Dipilih", st.session_state.selected_folder)
     
     with col3:
-        selected_count = len(st.session_state.selected_folders) if st.session_state.selected_folders else len(st.session_state.available_folders)
-        st.metric("Folder Terpilih", f"{selected_count}/{len(st.session_state.available_folders)}")
+        st.metric("Features dalam Folder", len(current_features))
     
-    # Peta interaktif
-    st.header("🗺️ Peta Interaktif - Klik untuk Pilih Lokasi Gangguan")
+    # Peta interaktif - hanya show features dari folder yang dipilih
+    st.header(f"🗺️ Peta - Folder: {st.session_state.selected_folder}")
     
     interactive_map = create_interactive_map(
-        st.session_state.gdf_nearby, 
+        current_features, 
         st.session_state.gangguan_coords, 
         zoom_level
     )
@@ -463,7 +519,7 @@ if st.session_state.gdf_master is not None:
             st.session_state.map_click_data = click_data
             
             with st.spinner("Memproses lokasi yang dipilih..."):
-                success = analyze_from_map_click(click_data, radius_km)
+                success = analyze_from_map_click(click_data, radius_km, current_features)
                 if success:
                     st.success("✅ Analisis selesai!")
             st.rerun()
@@ -476,9 +532,8 @@ if st.session_state.gdf_master is not None:
         gangguan_point = Point(lon, lat)
         
         with st.spinner(f"Mencari features dalam radius {radius_km} km..."):
-            data_to_use = st.session_state.gdf_filtered if st.session_state.gdf_filtered is not None else st.session_state.gdf_master
             st.session_state.gdf_nearby = filter_features_nearby(
-                data_to_use, 
+                current_features, 
                 gangguan_point, 
                 radius_km
             )
@@ -490,11 +545,9 @@ if st.session_state.gdf_master is not None:
     
     # Show analysis results
     if st.session_state.analysis_done and st.session_state.gangguan_coords:
-        st.header(f"📊 Hasil Analisis Gangguan")
+        st.header(f"📊 Hasil Analisis Gangguan - {st.session_state.selected_folder}")
         
-        # Show folder filter info
-        if st.session_state.selected_folders:
-            st.info(f"**Folder aktif:** {', '.join(st.session_state.selected_folders)}")
+        st.info(f"**Folder yang aktif:** {st.session_state.selected_folder}")
         
         if st.session_state.map_click_data:
             st.write(f"**Sumber:** Klik Peta | **Lokasi:** {st.session_state.gangguan_coords[0]:.6f}, {st.session_state.gangguan_coords[1]:.6f}")
@@ -511,15 +564,15 @@ if st.session_state.gdf_master is not None:
             st.metric("Features Ditemukan", feature_count)
         
         with col2:
-            if st.session_state.gdf_nearby is not None and not st.session_state.gdf_nearby.empty:
-                closest_dist = st.session_state.gdf_nearby['jarak_meter'].iloc[0]
+            if st.session_state.gdf_nearby and len(st.session_state.gdf_nearby) > 0:
+                closest_dist = st.session_state.gdf_nearby[0]['jarak_meter']
                 st.metric("Jarak Terdekat", f"{closest_dist:.0f} m")
             else:
                 st.metric("Jarak Terdekat", "Tidak ada")
         
         with col3:
-            if st.session_state.gdf_nearby is not None and not st.session_state.gdf_nearby.empty:
-                types = st.session_state.gdf_nearby.geometry.type.unique()
+            if st.session_state.gdf_nearby and len(st.session_state.gdf_nearby) > 0:
+                types = set(feat['geometry'].geom_type for feat in st.session_state.gdf_nearby)
                 st.metric("Tipe Geometri", len(types))
             else:
                 st.metric("Tipe Geometri", "0")
@@ -528,60 +581,63 @@ if st.session_state.gdf_master is not None:
             st.metric("Radius Pencarian", f"{radius_km} km")
         
         # Results table
-        if st.session_state.gdf_nearby is not None and not st.session_state.gdf_nearby.empty:
+        if st.session_state.gdf_nearby and len(st.session_state.gdf_nearby) > 0:
             st.header("📋 Detail Features Terdekat")
             
-            display_df = st.session_state.gdf_nearby.copy()
-            cols_to_display = [col for col in display_df.columns if col != 'geometry']
+            # Convert to DataFrame for display
+            display_data = []
+            for feature in st.session_state.gdf_nearby:
+                display_data.append({
+                    'Nama': feature.get('name', 'Unnamed'),
+                    'Jarak (m)': f"{feature.get('jarak_meter', 0):.0f}",
+                    'Tipe Geometry': feature['geometry'].geom_type,
+                    'Deskripsi': feature.get('description', '')[:100] + '...' if feature.get('description') and len(feature.get('description')) > 100 else feature.get('description', ''),
+                    'Folder': feature.get('folder', '')
+                })
             
-            # Find name column
-            name_cols = [col for col in cols_to_display if 'name' in col.lower()]
-            if name_cols:
-                name_col = name_cols[0]
-                display_columns = [name_col, 'jarak_meter'] + [col for col in cols_to_display if col not in [name_col, 'jarak_meter']]
-            else:
-                display_columns = ['jarak_meter'] + [col for col in cols_to_display if col != 'jarak_meter']
-            
-            st.dataframe(display_df[display_columns], use_container_width=True)
+            display_df = pd.DataFrame(display_data)
+            st.dataframe(display_df, use_container_width=True)
             
             # Download
-            csv_data = display_df[display_columns].to_csv(index=False)
+            csv_data = display_df.to_csv(index=False)
             st.download_button(
                 label="📥 Download Hasil Analisis (CSV)",
                 data=csv_data,
-                file_name=f"gangguan_{st.session_state.gangguan_coords[0]:.6f}_{st.session_state.gangguan_coords[1]:.6f}_{datetime.now().strftime('%H%M')}.csv",
+                file_name=f"gangguan_{st.session_state.selected_folder}_{st.session_state.gangguan_coords[0]:.6f}_{st.session_state.gangguan_coords[1]:.6f}_{datetime.now().strftime('%H%M')}.csv",
                 mime="text/csv"
             )
         else:
-            st.warning(f"⚠️ Tidak ada features ditemukan dalam radius {radius_km} km.")
+            st.warning(f"⚠️ Tidak ada features ditemukan dalam radius {radius_km} km pada folder {st.session_state.selected_folder}.")
     
     else:
-        # Initial view
-        st.markdown("""
-        ## 📁 Sistem GIS dengan Folder Selection
+        # Initial view for selected folder
+        st.markdown(f"""
+        ## 📁 Menampilkan Folder: **{st.session_state.selected_folder}**
         
-        **Cara penggunaan:**
-        1. **Load KML Data** dari sidebar
-        2. **Pilih folder** yang ingin dianalisis
-        3. **Klik di peta** untuk pilih lokasi gangguan
-        4. **Lihat hasil** analisis per folder
+        **{len(current_features)} features** tersedia dalam folder ini.
+        
+        **Langkah selanjutnya:**
+        1. **Klik di peta** untuk memilih lokasi gangguan
+        2. **Atau input koordinat manual** di sidebar
+        3. **Lihat hasil analisis** untuk folder ini
         """)
 
 else:
     st.info("""
-    ## 📁 Welcome to GIS KML Folder Selector
+    ## 📁 Welcome to GIS KML Folder Viewer
     
     **Silakan:**
     1. Klik **"Load KML Data"** di sidebar untuk memuat data
-    2. Pilih folder yang ingin dianalisis
-    3. Klik di peta untuk memilih lokasi gangguan
+    2. Pilih folder yang ingin dilihat dari dropdown
+    3. Features dari folder yang dipilih akan ditampilkan di peta
+    4. Klik di peta untuk analisis gangguan
     
     **Fitur:**
-    - 📂 Pilih data per folder dari KML
-    - 🎯 Filter analisis berdasarkan area tertentu
-    - 🗺️ Klik peta untuk input lokasi
-    - 📊 Hasil analisis spesifik per folder
+    - 📂 Pilih folder untuk dilihat di peta
+    - 🗺️ Hanya menampilkan features dari folder yang dipilih
+    - 🎯 Analisis gangguan spesifik per folder
+    - 📊 Detail features dalam folder
     """)
 
 st.markdown("---")
-st.markdown("**GIS KML Folder Selector** © 2024 | Folder-based Analysis")
+st.markdown("**GIS KML Folder Viewer** © 2024 | View by Folder")
