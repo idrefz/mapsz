@@ -28,6 +28,10 @@ if 'gdf_nearby' not in st.session_state:
     st.session_state.gdf_nearby = None
 if 'gangguan_coords' not in st.session_state:
     st.session_state.gangguan_coords = None
+if 'map_click_data' not in st.session_state:
+    st.session_state.map_click_data = None
+if 'last_click_coords' not in st.session_state:
+    st.session_state.last_click_coords = None
 
 # Fungsi untuk memuat KML master dengan caching
 @st.cache_data(ttl=3600)  # Cache 1 jam
@@ -100,35 +104,54 @@ def create_detailed_popup(row):
     """
     return popup_html
 
-# Fungsi untuk membuat peta
-def create_map(gdf_nearby, gangguan_coords, zoom=15):
-    """Membuat peta Folium dengan features terdekat"""
+# Fungsi untuk membuat peta interaktif
+def create_interactive_map(gdf_nearby, gangguan_coords, zoom=15):
+    """Membuat peta Folium dengan fitur klik interaktif"""
+    # Tentukan lokasi awal peta
+    if gangguan_coords:
+        center_loc = gangguan_coords
+    else:
+        center_loc = [-6.2, 106.8]
+    
     m = folium.Map(
-        location=gangguan_coords, 
+        location=center_loc, 
         zoom_start=zoom, 
         control_scale=True
     )
     
-    # Tambahkan marker titik gangguan
+    # Tambahkan event click handler
+    m.add_child(folium.LatLngPopup())
+    
+    # Tambahkan instruksi klik
     folium.Marker(
-        location=gangguan_coords,
-        popup=f"<b>🚨 TITIK GANGGUAN</b><br>Lat: {gangguan_coords[0]:.6f}<br>Lon: {gangguan_coords[1]:.6f}",
-        icon=folium.Icon(color='red', icon='exclamation-triangle', prefix='fa')
+        location=center_loc,
+        icon=folium.DivIcon(
+            html='<div style="background-color: white; padding: 5px; border: 1px solid #ccc; border-radius: 3px; font-size: 12px;">📍 Klik di peta untuk pilih lokasi gangguan</div>'
+        )
     ).add_to(m)
     
-    # Tambahkan buffer zone
-    folium.Circle(
-        location=gangguan_coords,
-        radius=5000,  # 5km dalam meter
-        color='red',
-        fill=True,
-        fillColor='red',
-        fillOpacity=0.1,
-        popup="Area Pencarian (5km)"
-    ).add_to(m)
+    # Jika ada koordinat gangguan, tampilkan marker
+    if gangguan_coords:
+        # Tambahkan marker titik gangguan
+        folium.Marker(
+            location=gangguan_coords,
+            popup=f"<b>🚨 TITIK GANGGUAN</b><br>Lat: {gangguan_coords[0]:.6f}<br>Lon: {gangguan_coords[1]:.6f}",
+            icon=folium.Icon(color='red', icon='exclamation-triangle', prefix='fa')
+        ).add_to(m)
+        
+        # Tambahkan buffer zone
+        folium.Circle(
+            location=gangguan_coords,
+            radius=5000,  # 5km dalam meter
+            color='red',
+            fill=True,
+            fillColor='red',
+            fillOpacity=0.1,
+            popup="Area Pencarian (5km)"
+        ).add_to(m)
     
-    # Tambahkan features terdekat
-    if not gdf_nearby.empty:
+    # Tambahkan features terdekat jika ada
+    if gdf_nearby is not None and not gdf_nearby.empty:
         for idx, row in gdf_nearby.iterrows():
             # Style berdasarkan tipe geometry
             if row.geometry.geom_type == 'Point':
@@ -163,15 +186,43 @@ def create_map(gdf_nearby, gangguan_coords, zoom=15):
     
     return m
 
+# Fungsi untuk analisis dari klik peta
+def analyze_from_map_click(click_data, radius_km):
+    """Melakukan analisis berdasarkan data klik dari peta"""
+    if click_data and 'lat' in click_data and 'lng' in click_data:
+        lat = click_data['lat']
+        lng = click_data['lng']
+        
+        st.session_state.gangguan_coords = [lat, lng]
+        st.session_state.analysis_done = True
+        
+        # Buat titik gangguan
+        gangguan_point = Point(lng, lat)
+        
+        # Filter features terdekat
+        with st.spinner(f"Mencari features dalam radius {radius_km} km..."):
+            st.session_state.gdf_nearby = filter_features_nearby(
+                st.session_state.gdf_master, 
+                gangguan_point, 
+                radius_km
+            )
+        
+        return True
+    return False
+
 # UI Streamlit
 st.title("🚨 GIS Quick Response - Analisis Gangguan")
-st.markdown("**Input koordinat gangguan → Dapatkan info jaringan terdekat secara instan**")
+st.markdown("**Pilih lokasi dengan klik peta atau input manual → Dapatkan info jaringan terdekat secara instan**")
 
 # Sidebar untuk input
 with st.sidebar:
-    st.header("📍 Input Koordinat Gangguan")
+    st.header("📍 Input Lokasi Gangguan")
     st.markdown("---")
     
+    st.subheader("🎯 Cara 1: Klik di Peta")
+    st.info("Klik langsung di peta untuk memilih lokasi gangguan")
+    
+    st.subheader("📝 Cara 2: Input Manual")
     # Input koordinat
     col1, col2 = st.columns(2)
     with col1:
@@ -191,6 +242,8 @@ with st.sidebar:
             st.session_state.analysis_done = False
             st.session_state.gdf_nearby = None
             st.session_state.gangguan_coords = None
+            st.session_state.map_click_data = None
+            st.session_state.last_click_coords = None
             st.rerun()
     
     st.markdown("---")
@@ -202,9 +255,9 @@ with st.sidebar:
     st.markdown("---")
     st.info("""
     **Cara Penggunaan:**
-    1. Input koordinat gangguan
-    2. Atur radius pencarian
-    3. Klik **Analisis Gangguan**
+    1. **Pilih lokasi** dengan klik di peta ATAU
+    2. **Input koordinat** manual
+    3. Atur radius pencarian
     4. Lihat hasil di peta & tabel
     """)
 
@@ -217,7 +270,41 @@ if st.session_state.gdf_master is None:
 
 # Main content
 if st.session_state.gdf_master is not None:
-    # Jika tombol analisis ditekan
+    # Buat peta interaktif
+    st.header("🗺️ Peta Interaktif - Klik untuk Pilih Lokasi Gangguan")
+    
+    # Buat peta
+    interactive_map = create_interactive_map(
+        st.session_state.gdf_nearby, 
+        st.session_state.gangguan_coords, 
+        zoom_level
+    )
+    
+    # Tampilkan peta dan capture klik
+    map_data = st_folium(
+        interactive_map, 
+        width=1200, 
+        height=500,
+        key="interactive_map"
+    )
+    
+    # Proses klik peta
+    if map_data and map_data.get("last_clicked"):
+        click_data = map_data["last_clicked"]
+        # Cek jika klik baru berbeda dari yang sebelumnya
+        current_click = (click_data['lat'], click_data['lng'])
+        last_click = st.session_state.last_click_coords
+        
+        if last_click is None or abs(current_click[0] - last_click[0]) > 0.0001 or abs(current_click[1] - last_click[1]) > 0.0001:
+            st.session_state.last_click_coords = current_click
+            st.session_state.map_click_data = click_data
+            
+            # Otomatis lakukan analisis ketika peta diklik
+            with st.spinner("Memproses lokasi yang dipilih..."):
+                analyze_from_map_click(click_data, radius_km)
+            st.rerun()
+    
+    # Jika tombol analisis manual ditekan
     if analyze_btn:
         st.session_state.analysis_done = True
         st.session_state.gangguan_coords = [lat, lon]
@@ -232,11 +319,22 @@ if st.session_state.gdf_master is not None:
                 gangguan_point, 
                 radius_km
             )
+        st.rerun()
+    
+    # Tampilkan informasi klik terbaru
+    if st.session_state.map_click_data:
+        st.info(f"📍 **Lokasi terpilih dari peta:** Lat: {st.session_state.map_click_data['lat']:.6f}, Lon: {st.session_state.map_click_data['lng']:.6f}")
     
     # Tampilkan hasil analisis jika sudah dilakukan
     if st.session_state.analysis_done and st.session_state.gangguan_coords:
         st.header(f"📊 Hasil Analisis Gangguan")
-        st.write(f"**Lokasi:** {st.session_state.gangguan_coords[0]:.6f}, {st.session_state.gangguan_coords[1]:.6f}")
+        
+        # Tampilkan sumber lokasi
+        if st.session_state.map_click_data:
+            st.write(f"**Sumber:** Klik Peta | **Lokasi:** {st.session_state.gangguan_coords[0]:.6f}, {st.session_state.gangguan_coords[1]:.6f}")
+        else:
+            st.write(f"**Sumber:** Input Manual | **Lokasi:** {st.session_state.gangguan_coords[0]:.6f}, {st.session_state.gangguan_coords[1]:.6f}")
+        
         st.write(f"**Radius:** {radius_km} km")
         
         # Tampilkan statistik
@@ -262,23 +360,6 @@ if st.session_state.gdf_master is not None:
         
         with col4:
             st.metric("Radius Pencarian", f"{radius_km} km")
-        
-        # Buat dan tampilkan peta
-        st.header("🗺️ Peta Lokasi Gangguan & Jaringan Terdekat")
-        
-        if st.session_state.gdf_nearby is not None:
-            m = create_map(st.session_state.gdf_nearby, st.session_state.gangguan_coords, zoom_level)
-            
-            # Gunakan st_folium dengan key yang unique untuk menjaga state peta
-            map_data = st_folium(
-                m, 
-                width=1200, 
-                height=600,
-                key=f"map_{lat}_{lon}"  # Key unique berdasarkan koordinat
-            )
-            
-            # Debug info untuk memastikan peta tetap di lokasi yang benar
-            st.caption(f"Peta terpusat di: {st.session_state.gangguan_coords}")
         
         # Tampilkan tabel hasil
         if st.session_state.gdf_nearby is not None and not st.session_state.gdf_nearby.empty:
@@ -314,7 +395,7 @@ if st.session_state.gdf_master is not None:
             st.download_button(
                 label="📥 Download Hasil Analisis (CSV)",
                 data=csv_data,
-                file_name=f"gangguan_{lat:.6f}_{lon:.6f}_{datetime.now().strftime('%H%M')}.csv",
+                file_name=f"gangguan_{st.session_state.gangguan_coords[0]:.6f}_{st.session_state.gangguan_coords[1]:.6f}_{datetime.now().strftime('%H%M')}.csv",
                 mime="text/csv",
                 key="download_btn"
             )
@@ -327,11 +408,11 @@ if st.session_state.gdf_master is not None:
         ## 🚀 Sistem Quick Response Gangguan
         
         **Fitur Unggulan:**
+        - 🖱️ **Klik Peta** - Pilih lokasi gangguan langsung dari peta
         - ⚡ **Super Cepat** - Filter lokal tanpa load ulang data besar
-        - 📍 **Input Koordinat Langsung** - Tidak perlu upload file
+        - 📍 **Input Manual** - Alternatif input koordinat manual
         - 🎯 **Filter Cerdas** - Hanya tampilkan features terdekat
         - 📊 **Info Lengkap** - Semua atribut KML tersedia
-        - 💾 **Export Instant** - Download hasil analisis
         
         **Statistik Data Master:**
         """)
@@ -352,11 +433,6 @@ if st.session_state.gdf_master is not None:
                 st.metric("Features Bernama", named_features)
             else:
                 st.metric("Kolom Tersedia", len(st.session_state.gdf_master.columns))
-        
-        # Peta overview default
-        st.header("🗺️ Overview Jaringan")
-        overview_map = folium.Map(location=[-6.2, 106.8], zoom_start=10)
-        st_folium(overview_map, width=1200, height=400, key="overview_map")
 
 else:
     st.error("""
@@ -371,5 +447,5 @@ else:
 # Footer
 st.markdown("---")
 st.markdown(
-    "**GIS Quick Response** © 2024 | Optimized for Large KML Data | Response Time: < 3s"
+    "**GIS Quick Response** © 2024 | Fitur Klik Peta Aktif | Response Time: < 3s"
 )
